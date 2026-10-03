@@ -1,0 +1,25 @@
+#!/bin/sh /etc/rc.common
+
+START=60
+USE_PROCD=1
+
+PROG=/usr/sbin/routebot
+
+start_service() {
+	procd_open_instance
+	procd_set_param command "$PROG" -c /etc/config/routebot
+	procd_set_param respawn
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	# the exit flush can take a moment with big lists
+	procd_set_param term_timeout 30
+	procd_close_instance
+}
+
+reload_service() {
+	procd_send_signal routebot '*' HUP
+}
+
+service_triggers() {
+	procd_add_reload_trigger routebot
+}
