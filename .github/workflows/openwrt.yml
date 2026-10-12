@@ -1,0 +1,20 @@
+# Build the OpenWrt package for every arch in the shared matrix. Pushes to
+# the default branch also land in https://sochinorth.github.io/openwrt-pkgs/
+name: openwrt
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write  # snapshot release
+
+jobs:
+  package:
+    uses: sochinorth/openwrt-pkgs/.github/workflows/build-package.yml@main
+    with:
+      package: routebot
+      path: openwrt/routebot
+    secrets: inherit
