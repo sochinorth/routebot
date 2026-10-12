@@ -1,6 +1,6 @@
 # Build the OpenWrt package for every arch in the shared matrix. Pushes to
 # the default branch also land in https://sochinorth.github.io/openwrt-pkgs/
-name: openwrt
+name: OpenWrt package
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   package:
-    uses: sochinorth/openwrt-pkgs/.github/workflows/build-package.yml@main
+    uses: sochinorth/openwrt-pkgs/.github/workflows/build-package.yml@trunk
     with:
       package: routebot
       path: openwrt/routebot
