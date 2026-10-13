@@ -372,7 +372,7 @@ config group 'tun'
 	list device 't2'
 	option fwmark '0x40'
 	option probe '10.64.0.1'
-	option probe_interval '0.2'
+	option probe_timer '0.2'
 	option probe_count '3'
 
 config rule 'tunneled'

@@ -97,7 +97,7 @@ config group 'vpn_mullvad_se'        # N = 3
 	option fwmark '0x20'
 	option probe          '10.64.0.1'
 	option probe6         'fc00:bbbb:bbbb:bb01::1'
-	option probe_interval '1'        # seconds, fractions allowed
+	option probe_timer    '1'        # seconds, fractions allowed
 	option probe_count    '3'
 	option buckets        '512'
 
@@ -129,7 +129,7 @@ config rule 'misc'
 
 **Probes**
 - With `probe` / `probe6` set, routebot pings that address through each member
-  separately every `probe_interval` (default 1s, at least 0.1s), which is also
+  separately every `probe_timer` (default 1s, at least 0.1s), which is also
   the reply timeout. `probe_count` (default 3) losses in a row take a member
   out; the same number of replies brings it back.
 - With only `probe` set, its verdict applies to both families.

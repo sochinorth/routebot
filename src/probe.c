@@ -314,7 +314,7 @@ static void tick_cb(struct uloop_timeout *t)
 {
 	struct pgroup *g = container_of(t, struct pgroup, tick);
 
-	uloop_timeout_set(t, g->cg->probe_interval_ms ? g->cg->probe_interval_ms : 1000);
+	uloop_timeout_set(t, g->cg->probe_timer_ms ? g->cg->probe_timer_ms : 1000);
 	for (size_t i = 0; i < g->cg->n_members; i++) {
 		for (int f = 0; f < 2; f++) {
 			struct psock *s = &g->members[i].s[f];
@@ -365,7 +365,7 @@ struct probes *probes_new(const struct config *cfg, void (*changed)(void))
 				sock_reset(&m->s[f]);
 			}
 		}
-		uloop_timeout_set(&g->tick, g->cg->probe_interval_ms ? g->cg->probe_interval_ms : 1000);
+		uloop_timeout_set(&g->tick, g->cg->probe_timer_ms ? g->cg->probe_timer_ms : 1000);
 	}
 	return p;
 

@@ -28,7 +28,7 @@ struct cfg_group {
 
 	bool has_probe[2];	/* [0] = v4, [1] = v6 */
 	uint8_t probe[2][16];
-	uint32_t probe_interval_ms;
+	uint32_t probe_timer_ms;
 	uint8_t probe_count;
 
 	/* resilient nexthop group parameters */

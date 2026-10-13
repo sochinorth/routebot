@@ -294,7 +294,7 @@ static int parse_group(struct uci_context *ctx, struct uci_section *s, struct co
 	if (!g->name || !g->members)
 		return -1;
 	g->timer_idle = g->timer_busy = TIMER_UNSET;	/* buckets 0 = unset */
-	g->probe_interval_ms = DEFAULT_PROBE_MS;
+	g->probe_timer_ms = DEFAULT_PROBE_MS;
 	g->probe_count = DEFAULT_PROBE_COUNT;
 
 	o = uci_lookup_option(ctx, s, "device");
@@ -338,9 +338,9 @@ static int parse_group(struct uci_context *ctx, struct uci_section *s, struct co
 		g->has_probe[1] = true;
 	}
 
-	v = opt_str(ctx, s, "probe_interval");
-	if (v && (parse_ms(v, &g->probe_interval_ms) || g->probe_interval_ms < MIN_PROBE_MS)) {
-		err("config: group '%s': probe_interval '%s' must be seconds >= 0.1",
+	v = opt_str(ctx, s, "probe_timer");
+	if (v && (parse_ms(v, &g->probe_timer_ms) || g->probe_timer_ms < MIN_PROBE_MS)) {
+		err("config: group '%s': probe_timer '%s' must be seconds >= 0.1",
 		    g->name, v);
 		return -1;
 	}
