@@ -1,12 +1,15 @@
 # routebot
 
 A small policy-routing daemon for OpenWrt and plain Linux. It routes traffic
-to specific interfaces by fwmark or by destination CIDR lists, and keeps those
-routes in sync as interfaces go up and down, gateways change and config gets
-reloaded.
+through groups of interfaces by fwmark or by destination CIDR lists, and keeps
+those routes in sync as links go up and down, gateways change, health probes
+fail and config gets reloaded.
 
-If an interface is down, routebot blackholes its traffic instead of letting it
-leak out another uplink.
+A group bundles one or more devices into a resilient ECMP nexthop group.
+Members that are down or fail their probes drop out; when no member is left,
+the group's traffic is blackholed instead of leaking out another uplink.
+
+Needs kernel 5.13 or newer (resilient nexthop groups).
 
 ## What it sets up
 
@@ -17,29 +20,50 @@ $ ip rule
 10000:  from all fwmark 0/0xff000000 lookup 10000 proto 233
 10001:  from all fwmark 0xfe000000/0xff000000 lookup 10001 proto 233
 10002:  from all fwmark 0x10000000/0xff000000 lookup 10002 proto 233
+10003:  from all fwmark 0xaa000000/0xff000000 lookup 10003 proto 233
+10004:  from all fwmark 0x20000000/0xff000000 lookup 10004 proto 233
+
+$ ip route show table 10004
+default nhid 10005 proto 233
+	nexthop dev vpn_mullvad_se1 weight 1
+	nexthop dev vpn_mullvad_se2 weight 2
+	nexthop dev vpn_mullvad_se3 weight 1
+
+$ ip route show table 10000
+1.0.0.0/24 nhid 10001 dev vpn_warp_dme proto 233
+1.1.1.0/24 nhid 10001 dev vpn_warp_dme proto 233
 ...
 
-$ ip route show table 10002
-default nhid 10001 proto 233
+$ ip nexthop show proto 233
+id 10005 group 10011/10013,2/10015 type resilient buckets 512 idle_timer 120 unbalanced_timer 600 ...
+id 10011 dev vpn_mullvad_se1 scope host proto 233
+...
 ```
 
-- **Unmarked traffic** looks up the CIDR table (`table_id`, rule at
-  `rule_prio`). Addresses not in any list fall through to the next rule,
-  normally `main`.
-- **Probe traffic** (`probe_mark`) uses the probe table (`table_id + 1`, rule
-  at `rule_prio + 1`), which routebot uses to health-check each member.
-- **Marked traffic** goes to its group's table (`table_id + 1 + N`, rule at
-  `rule_prio + 1 + N`, N being the group's 1-based position), which holds a
-  single default route through the group.
+| | table | rule prio | matches |
+|---|---|---|---|
+| CIDR lists | `table_id` | `rule_prio` | unmarked traffic |
+| probes | `table_id + 1` | `rule_prio + 1` | `probe_mark` |
+| group N | `table_id + 1 + N` | `rule_prio + 1 + N` | the group's `fwmark` |
 
-Each group is a resilient ECMP nexthop group over its member devices. A member
-drops out while its link is down or its probes fail; when no member is usable,
-the group's routes become blackholes instead of leaking out another uplink.
-Resilient groups need kernel 5.13 or newer.
+N is the group's 1-based position in the config. Every rule is gated on a
+distinct fwmark, so their order doesn't matter.
+
+- **Unmarked traffic** looks up the CIDR table. Addresses not in any list fall
+  through to the next rule, normally `main`.
+- **Marked traffic** goes to its group's table, which holds a single default
+  route through the group.
+- **Probe traffic** only comes from routebot itself (see Probes).
+
+Groups are nexthop objects: `nexthop_id + 1 + 2g + f` for group g (0-based)
+and family f (0 = v4, 1 = v6), followed by one nexthop per member device and
+family. Routes point at the group, so a member leaving or joining is a single
+group replace with no route rewritten.
 
 Everything is applied for both IPv4 and IPv6. Every rule, route and nexthop is
 tagged with `rt_proto`, so routebot can clean up after itself. On exit it
 removes all of it, and on startup it removes anything left behind by a crash.
+It refuses to start if a nexthop id in its range belongs to someone else.
 
 ## Configuration
 
@@ -49,8 +73,8 @@ another file.
 ```
 config routebot
 	option fwmask      '0xff000000'  # routebot's slice of the fwmark
-	option table_id    '10000'       # CIDR table; +1 probe; +1+N group N
-	option rule_prio   '10000'       # CIDR rule; +1 probe; +1+N group N
+	option table_id    '10000'       # CIDR table; +1 probes; +1+N group N
+	option rule_prio   '10000'       # CIDR rule; +1 probes; +1+N group N
 	option gw_table    'main'        # where gateways are learned from
 	option rt_proto    '233'         # protocol tag on everything routebot owns
 	option nexthop_id  '10000'       # base for nexthop object ids
@@ -63,7 +87,7 @@ config group 'vpn_warp_dme'          # N = 1; device is the section name
 	option fwmark '0x10'             # shifted into fwmask -> 0x10000000
 
 config group 'wan'                   # N = 2
-	option device 'pppoe-wan'
+	list device 'wan'                # netifd interface -> pppoe-wan
 	option fwmark '0xaa'
 
 config group 'vpn_mullvad_se'        # N = 3
@@ -90,12 +114,12 @@ config rule 'misc'
 - `device` entries name a netifd interface or a Linux device, optionally with
   a `:weight` (1..256, default 1). A netifd interface (`wan`) is followed to
   its current L3 device (`pppoe-wan`) over ubus; any other name is taken as a
-  Linux device. Without any entry, the section name is the device. A device
-  may belong to several groups.
-- `fwmark` is optional. Without it, the group gets no rule of its own and can
-  only be used as a target for rules.
-- `buckets`, `timer_idle` and `timer_busy` tune the resilient group (see
-  `ip-nexthop(8)`); `timer_busy` should exceed `timer_idle`.
+  Linux device. Without any entry, the section name is the device.
+- A device may belong to several groups.
+- `fwmark` is optional. Without it, the group gets no table or rule of its own
+  and can only be used as a target for rules.
+- A member is usable while its link is up with carrier, it has a gateway (or
+  is point-to-point / no-ARP), and its probes pass.
 
 **Gateways**
 - routebot learns gateways from the default routes in `gw_table`. On a group
@@ -105,18 +129,33 @@ config rule 'misc'
 
 **Probes**
 - With `probe` / `probe6` set, routebot pings that address through each member
-  separately every `probe_interval` (default 1s, at least 0.1s).
-  `probe_count` (default 3) consecutive losses take a member out, the same
-  number of replies in a row bring it back.
+  separately every `probe_interval` (default 1s, at least 0.1s), which is also
+  the reply timeout. `probe_count` (default 3) losses in a row take a member
+  out; the same number of replies brings it back.
+- With only `probe` set, its verdict applies to both families.
+- Probes start out optimistic: after startup or a reload every member counts
+  as up until it fails `probe_count` times.
+- Probes are bound to their member device and marked with `probe_mark`, which
+  selects the probe table: one default route per probed device, kept whether
+  the member is healthy or not. Dead members keep being probed, even while the
+  group is blackholed.
 - Set `rp_filter` to 0 on member devices. Strict mode (1) drops the replies,
   and so does loose mode (2) when the probe address is covered by a
-  blackholed CIDR list.
+  blackholed CIDR list. routebot warns about it.
 
-**Multipath hashing** decides which member a flow uses.
-`net.ipv4.fib_multipath_hash_policy=0` (the default, L3) keeps each
-client-destination pair on one exit. Policy 3 with
-`net.ipv4.fib_multipath_hash_fields=0x0001` (source IP only) pins each client
-to one exit. IPv6 has the same knobs under `net.ipv6`.
+**Failover and stickiness**
+- Each group hashes flows into `buckets` buckets spread across its members.
+  When a member drops out, only its buckets move; flows on the others stay.
+- When a member comes back, buckets idle for `timer_idle` seconds move back to
+  it. Buckets still busy after `timer_busy` seconds move anyway, breaking the
+  flows in them. Keep `timer_busy` above `timer_idle`, or 0 to never force.
+- `buckets` can't be changed in place: changing it recreates the group, and
+  its routes, on reload.
+- Which flow lands in which bucket is the kernel's multipath hash.
+  `net.ipv4.fib_multipath_hash_policy=0` (the default, L3) keeps each
+  client-destination pair on one exit. Policy 3 with
+  `net.ipv4.fib_multipath_hash_fields=0x0001` (source IP only) pins each
+  client to one exit. IPv6 has the same knobs under `net.ipv6`.
 
 **Rules**
 - `group` names the group the rule's CIDRs are routed through.
@@ -134,6 +173,17 @@ Host bits are masked off, and invalid lines are skipped with a warning.
 2606:4700::/32
 ```
 
+### Upgrading from 0.1
+
+- `config interface` is now `config group`; use `list device` for its
+  devices (`option device` still works).
+- Rules take `option group` instead of `option iface`.
+- `iface_prio` is gone: the CIDR rule moved to `rule_prio`, groups follow at
+  `rule_prio + 2`. Default `rule_prio` is now 10000.
+- Group tables moved from `table_id + N` to `table_id + 1 + N`.
+
+routebot refuses the old options with an error naming the replacement.
+
 ## Running
 
 ```
@@ -147,6 +197,14 @@ routebot [-c config] [-v] [-q]
 
 On OpenWrt use `service routebot start|reload|stop`. Changing the UCI config
 triggers a reload automatically.
+
+Each sync logs what it touched, e.g. a member failing its probes:
+
+```
+routebot: info: vpn_mullvad_se: member vpn_mullvad_se2 probe down
+routebot: info: vpn_mullvad_se: v4 via vpn_mullvad_se1, vpn_mullvad_se3
+routebot: info: sync (probe): 0 routes set, 0 deleted, 1 nexthops set, 0 deleted, 0 rules added, 0 deleted
+```
 
 ## Building
 
@@ -169,7 +227,7 @@ make package/routebot/compile
 ### Generic Linux
 
 ```
-cmake -B build -DCMAKE_PREFIX_PATH=/where/libubox/and/uci/are/installed
+cmake -B build -DCMAKE_PREFIX_PATH=/where/libubox/uci/ubus/are/installed
 cmake --build build
 ```
 
