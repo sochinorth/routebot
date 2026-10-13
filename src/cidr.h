@@ -11,7 +11,7 @@
 struct prefix {
 	uint8_t family;		/* AF_INET or AF_INET6 */
 	uint8_t plen;
-	uint16_t iface;		/* index into config.ifaces */
+	uint16_t group;		/* index into config.groups */
 	uint16_t rule;		/* config order of the owning rule, for first-wins */
 	uint8_t addr[16];
 };
@@ -35,6 +35,6 @@ int prefix_cmp(const struct prefix *a, const struct prefix *b);
  * Returns the new length.
  */
 size_t prefixes_normalize(struct prefix *p, size_t n, const char *const *rule_names,
-			  const char *const *iface_names);
+			  const char *const *group_names);
 
 #endif

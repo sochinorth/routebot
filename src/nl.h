@@ -24,9 +24,36 @@ struct route_spec {
 	uint8_t proto;
 	bool has_gw;
 	uint32_t table;
+	uint32_t nh_id;		/* RTN_UNICAST via a nexthop object; oif/gw unused */
 	int oif;
 	uint8_t dst[16];
 	uint8_t gw[16];
+};
+
+#define MAX_NH_GROUP 32
+
+struct nh_grp_entry {
+	uint32_t id;
+	uint16_t weight;	/* 1..256 */
+};
+
+/*
+ * A nexthop object: either a single device nexthop (n_grp == 0, family set,
+ * oif + optional gateway) or a resilient group (n_grp > 0, family AF_UNSPEC).
+ */
+struct nexthop_spec {
+	uint32_t id;
+	uint8_t family;
+	uint8_t proto;
+	int oif;
+	bool has_gw;
+	uint8_t gw[16];
+
+	uint16_t n_grp;
+	struct nh_grp_entry grp[MAX_NH_GROUP];
+	uint16_t buckets;
+	uint32_t timer_idle;	/* seconds */
+	uint32_t timer_busy;	/* seconds, 0 = never force */
 };
 
 struct rule_spec {
@@ -54,6 +81,12 @@ void nl_close(struct nl *nl);
 int nl_dump(struct nl *nl, struct nlmsghdr *req, mnl_cb_t cb, void *data);
 
 /*
+ * Dump all nexthop objects. cb gets each RTM_NEWNEXTHOP message.
+ * Returns 0, -errno, or -EOPNOTSUPP if the kernel lacks nexthop objects.
+ */
+int nl_dump_nexthops(struct nl *nl, mnl_cb_t cb, void *data);
+
+/*
  * Writes are queued into a batch and sent in large sendmsg() chunks.
  * Requests go without NLM_F_ACK: rtnetlink handles them synchronously
  * inside sendmsg(), so any errors are already queued when it returns and
@@ -62,6 +95,8 @@ int nl_dump(struct nl *nl, struct nlmsghdr *req, mnl_cb_t cb, void *data);
 void nl_batch_begin(struct nl *nl);
 void nl_route(struct nl *nl, enum nl_op op, const struct route_spec *r);
 void nl_rule(struct nl *nl, enum nl_op op, const struct rule_spec *r);
+/* NL_SET creates or replaces in place; on delete only id matters. */
+void nl_nexthop(struct nl *nl, enum nl_op op, const struct nexthop_spec *n);
 /* Returns the number of unexpected errors in this batch. */
 unsigned nl_batch_end(struct nl *nl);
 
