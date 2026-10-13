@@ -8,6 +8,7 @@
 #include <linux/fib_rules.h>
 #include <linux/filter.h>
 #include <linux/netlink.h>
+#include <linux/nexthop.h>
 #include <linux/rtnetlink.h>
 
 #include "log.h"
@@ -147,6 +148,25 @@ int nl_dump(struct nl *nl, struct nlmsghdr *req, mnl_cb_t cb, void *data)
 	return 0;
 }
 
+int nl_dump_nexthops(struct nl *nl, mnl_cb_t cb, void *data)
+{
+	char buf[128] __attribute__((aligned(4)));
+	struct nlmsghdr *nlh = mnl_nlmsg_put_header(buf);
+	struct nhmsg *nhm;
+	int ret;
+
+	nlh->nlmsg_type = RTM_GETNEXTHOP;
+	/* strict checking: everything but the family must be zero */
+	nhm = mnl_nlmsg_put_extra_header(nlh, sizeof(*nhm));
+	nhm->nh_family = AF_UNSPEC;
+
+	ret = nl_dump(nl, nlh, cb, data);
+	/* no nexthop objects in this kernel */
+	if (ret == -EINVAL)
+		ret = -EOPNOTSUPP;
+	return ret;
+}
+
 /* --- batched writes --- */
 
 static bool error_expected(uint16_t type, int error)
@@ -158,6 +178,9 @@ static bool error_expected(uint16_t type, int error)
 		return error == ENOENT;
 	case RTM_NEWRULE:
 		return error == EEXIST;
+	case RTM_DELNEXTHOP:
+		/* the kernel flushes nexthops itself when their device goes down */
+		return error == ENOENT;
 	}
 	return false;
 }
@@ -186,6 +209,8 @@ static void describe_req(const struct nlmsghdr *req, bool capped, char *buf, siz
 	case RTM_DELROUTE: op = "route del"; break;
 	case RTM_NEWRULE: op = "rule add"; break;
 	case RTM_DELRULE: op = "rule del"; break;
+	case RTM_NEWNEXTHOP: op = "nexthop set"; break;
+	case RTM_DELNEXTHOP: op = "nexthop del"; break;
 	default:
 		snprintf(buf, len, "msg type %u", req->nlmsg_type);
 		return;
@@ -206,6 +231,24 @@ static void describe_req(const struct nlmsghdr *req, bool capped, char *buf, siz
 				  addr, sizeof(addr));
 		snprintf(buf, len, "%s %s/%u table %u", op, addr, rtm->rtm_dst_len,
 			 t.tb[RTA_TABLE] ? mnl_attr_get_u32(t.tb[RTA_TABLE]) : rtm->rtm_table);
+		if (t.tb[RTA_NH_ID]) {
+			size_t n = strlen(buf);
+
+			snprintf(buf + n, len - n, " nhid %u", mnl_attr_get_u32(t.tb[RTA_NH_ID]));
+		}
+	} else if (req->nlmsg_type == RTM_NEWNEXTHOP || req->nlmsg_type == RTM_DELNEXTHOP) {
+		const struct nhmsg *nhm = mnl_nlmsg_get_payload(req);
+
+		mnl_attr_parse(req, sizeof(*nhm), attr_collect, &t);
+		snprintf(buf, len, "%s id %u", op,
+			 t.tb[NHA_ID] ? mnl_attr_get_u32(t.tb[NHA_ID]) : 0);
+		if (t.tb[NHA_GROUP]) {
+			size_t n = strlen(buf);
+
+			snprintf(buf + n, len - n, " group of %zu",
+				 mnl_attr_get_payload_len(t.tb[NHA_GROUP]) /
+				 sizeof(struct nexthop_grp));
+		}
 	} else {
 		const struct fib_rule_hdr *frh = mnl_nlmsg_get_payload(req);
 
@@ -342,7 +385,7 @@ void nl_route(struct nl *nl, enum nl_op op, const struct route_spec *r)
 		rtm->rtm_type = RTN_UNSPEC;
 	} else {
 		rtm->rtm_type = r->type;
-		rtm->rtm_scope = (r->type == RTN_UNICAST && !r->has_gw) ?
+		rtm->rtm_scope = (r->type == RTN_UNICAST && !r->has_gw && !r->nh_id) ?
 				 RT_SCOPE_LINK : RT_SCOPE_UNIVERSE;
 	}
 
@@ -350,9 +393,13 @@ void nl_route(struct nl *nl, enum nl_op op, const struct route_spec *r)
 	if (r->plen)
 		mnl_attr_put(nlh, RTA_DST, alen, r->dst);
 	if (op != NL_DEL && r->type == RTN_UNICAST) {
-		mnl_attr_put_u32(nlh, RTA_OIF, r->oif);
-		if (r->has_gw)
-			mnl_attr_put(nlh, RTA_GATEWAY, alen, r->gw);
+		if (r->nh_id) {
+			mnl_attr_put_u32(nlh, RTA_NH_ID, r->nh_id);
+		} else {
+			mnl_attr_put_u32(nlh, RTA_OIF, r->oif);
+			if (r->has_gw)
+				mnl_attr_put(nlh, RTA_GATEWAY, alen, r->gw);
+		}
 	}
 
 	batch_next(nl);
@@ -375,6 +422,57 @@ void nl_rule(struct nl *nl, enum nl_op op, const struct rule_spec *r)
 	mnl_attr_put_u32(nlh, FRA_FWMASK, r->mask);
 	mnl_attr_put_u32(nlh, FRA_TABLE, r->table);
 	mnl_attr_put_u8(nlh, FRA_PROTOCOL, r->proto);
+
+	batch_next(nl);
+}
+
+/* USER_HZ, which is what the kernel takes for nexthop group timers */
+#define NH_HZ 100
+
+/* at most MAX_NH_GROUP * 8 bytes of NHA_GROUP: far below BATCH_LIMIT */
+static void put_res_group(struct nlmsghdr *nlh, const struct nexthop_spec *n)
+{
+	struct nexthop_grp grp[MAX_NH_GROUP] = {};
+	unsigned i, cnt = n->n_grp < MAX_NH_GROUP ? n->n_grp : MAX_NH_GROUP;
+	struct nlattr *nest;
+
+	for (i = 0; i < cnt; i++) {
+		grp[i].id = n->grp[i].id;
+		grp[i].weight = n->grp[i].weight - 1;
+	}
+	mnl_attr_put(nlh, NHA_GROUP, cnt * sizeof(grp[0]), grp);
+	mnl_attr_put_u16(nlh, NHA_GROUP_TYPE, NEXTHOP_GRP_TYPE_RES);
+
+	nest = mnl_attr_nest_start(nlh, NHA_RES_GROUP);
+	mnl_attr_put_u16(nlh, NHA_RES_GROUP_BUCKETS, n->buckets);
+	mnl_attr_put_u32(nlh, NHA_RES_GROUP_IDLE_TIMER, n->timer_idle * NH_HZ);
+	mnl_attr_put_u32(nlh, NHA_RES_GROUP_UNBALANCED_TIMER, n->timer_busy * NH_HZ);
+	mnl_attr_nest_end(nlh, nest);
+}
+
+void nl_nexthop(struct nl *nl, enum nl_op op, const struct nexthop_spec *n)
+{
+	struct nlmsghdr *nlh;
+	struct nhmsg *nhm;
+
+	nlh = batch_put(nl, op == NL_DEL ? RTM_DELNEXTHOP : RTM_NEWNEXTHOP,
+			op == NL_DEL ? 0 : NLM_F_CREATE | NLM_F_REPLACE);
+	nhm = mnl_nlmsg_put_extra_header(nlh, sizeof(*nhm));
+	mnl_attr_put_u32(nlh, NHA_ID, n->id);
+
+	/* deletes take a zeroed header and NHA_ID only */
+	if (op != NL_DEL) {
+		nhm->nh_protocol = n->proto;
+		if (n->n_grp) {
+			put_res_group(nlh, n);
+		} else {
+			nhm->nh_family = n->family;
+			mnl_attr_put_u32(nlh, NHA_OIF, n->oif);
+			if (n->has_gw)
+				mnl_attr_put(nlh, NHA_GATEWAY,
+					     n->family == AF_INET ? 4 : 16, n->gw);
+		}
+	}
 
 	batch_next(nl);
 }
