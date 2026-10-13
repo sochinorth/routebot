@@ -138,11 +138,11 @@ static void dump_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 		if (blobmsg_type(cur) != BLOBMSG_TYPE_TABLE)
 			continue;
 		blobmsg_parse(iface_policy, __I_MAX, it, blobmsg_data(cur),
-			      blobmsg_data_len(cur));
+		              blobmsg_data_len(cur));
 		if (!it[I_NAME])
 			continue;
 		if (map_add(&d->m, blobmsg_get_string(it[I_NAME]),
-			    it[I_L3DEV] ? blobmsg_get_string(it[I_L3DEV]) : "")) {
+		            it[I_L3DEV] ? blobmsg_get_string(it[I_L3DEV]) : "")) {
 			err("out of memory");
 			d->ok = false;
 			return;
@@ -206,7 +206,7 @@ static const struct blobmsg_policy obj_policy[__O_MAX] = {
 };
 
 static void obj_ev_cb(struct ubus_context *ctx, struct ubus_event_handler *ev,
-		      const char *type, struct blob_attr *msg)
+                      const char *type, struct blob_attr *msg)
 {
 	struct blob_attr *tb[__O_MAX];
 
@@ -233,7 +233,7 @@ static void connection_lost(struct ubus_context *ctx)
 }
 
 static int register_ev(struct ubus_event_handler *ev, ubus_event_handler_t cb,
-		       const char *pattern)
+                       const char *pattern)
 {
 	int ret;
 

@@ -89,7 +89,7 @@ static int prefix_sort_cmp(const void *pa, const void *pb)
 }
 
 size_t prefixes_normalize(struct prefix *p, size_t n, const char *const *rule_names,
-			  const char *const *group_names)
+                          const char *const *group_names)
 {
 	char buf[PREFIX_STRLEN];
 	size_t out = 0;

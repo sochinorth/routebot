@@ -117,7 +117,7 @@ static const char *opt_str(struct uci_context *ctx, struct uci_section *s, const
 }
 
 static int opt_u32(struct uci_context *ctx, struct uci_section *s, const char *name,
-		   uint32_t *out)
+                   uint32_t *out)
 {
 	const char *v = opt_str(ctx, s, name);
 
@@ -131,7 +131,7 @@ static int opt_u32(struct uci_context *ctx, struct uci_section *s, const char *n
 }
 
 static int parse_globals(struct uci_context *ctx, struct uci_section *s, struct config *c,
-			 struct nh_defaults *d)
+                         struct nh_defaults *d)
 {
 	const char *v;
 	uint32_t proto = c->rt_proto;
@@ -232,7 +232,7 @@ static int add_member(struct config *c, struct cfg_group *g, const char *entry)
 }
 
 static int parse_addr(const char *group, const char *opt, const char *v, int family,
-		      uint8_t *out)
+                      uint8_t *out)
 {
 	if (inet_pton(family, v, out) != 1) {
 		err("config: group '%s': invalid %s '%s'", group, opt, v);
@@ -265,7 +265,7 @@ static int parse_gw(struct config *c, struct cfg_group *g, const char *v, int f)
 }
 
 static int opt_timer(struct uci_context *ctx, struct uci_section *s, const char *group,
-		     const char *name, uint32_t *out)
+                     const char *name, uint32_t *out)
 {
 	uint32_t v;
 
@@ -282,7 +282,7 @@ static int opt_timer(struct uci_context *ctx, struct uci_section *s, const char 
 }
 
 static int parse_group(struct uci_context *ctx, struct uci_section *s, struct config *c,
-		       struct cfg_group *g)
+                       struct cfg_group *g)
 {
 	struct uci_option *o;
 	struct uci_element *le;
@@ -370,7 +370,7 @@ static int parse_group(struct uci_context *ctx, struct uci_section *s, struct co
 }
 
 static void load_list_file(const char *path, uint16_t group, uint16_t rule,
-			   struct prefix_vec *out, size_t *n_bad)
+                           struct prefix_vec *out, size_t *n_bad)
 {
 	char line[512];
 	unsigned lineno = 0;

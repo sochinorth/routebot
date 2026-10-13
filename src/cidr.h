@@ -35,6 +35,6 @@ int prefix_cmp(const struct prefix *a, const struct prefix *b);
  * Returns the new length.
  */
 size_t prefixes_normalize(struct prefix *p, size_t n, const char *const *rule_names,
-			  const char *const *group_names);
+                          const char *const *group_names);
 
 #endif

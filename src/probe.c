@@ -151,7 +151,7 @@ static void sock_reset(struct psock *s)
 }
 
 static bool reply_ok(const struct psock *s, const uint8_t *buf, ssize_t len,
-		     const struct sockaddr_storage *from)
+                     const struct sockaddr_storage *from)
 {
 	const struct cfg_group *cg = s->m->g->cg;
 
@@ -240,7 +240,7 @@ static void sock_open(struct psock *s, bool *warned)
 		return;
 
 	fd = s->fam ? socket(AF_INET6, SOCK_RAW | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_ICMPV6)
-		    : socket(AF_INET, SOCK_RAW | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_ICMP);
+	            : socket(AF_INET, SOCK_RAW | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_ICMP);
 	if (fd < 0) {
 		if (errno == EPERM || errno == EACCES) {
 			err("cannot open raw ICMP socket (%s), probes disabled", strerror(errno));

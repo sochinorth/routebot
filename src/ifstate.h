@@ -69,7 +69,7 @@ int live_event_cb(const struct nlmsghdr *nlh, void *data);
  * netdev[d] names device d's kernel netdev; NULL or "" = unresolved.
  */
 void live_resolve(const struct live *l, const struct config *cfg,
-		  const char *const *netdev, struct ifview *out);
+                  const char *const *netdev, struct ifview *out);
 
 /* Ignores downs. */
 bool ifrender_eq(const struct ifrender *a, const struct ifrender *b);

@@ -124,7 +124,7 @@ static bool snap_eq(const struct snap *a, const struct snap *b)
 		    !ifrender_eq(&a->ifs[d].fam[1], &b->ifs[d].fam[1]))
 			return false;
 	return !memcmp(a->member_up, b->member_up,
-		       cfg_member_index(cfg, cfg->n_groups, 0) * sizeof(*a->member_up));
+	               cfg_member_index(cfg, cfg->n_groups, 0) * sizeof(*a->member_up));
 }
 
 /*

@@ -157,7 +157,7 @@ static void set_gw(struct defroute *d, const struct nlattr *a)
 
 /* Expand one route message into one defroute per nexthop. */
 static size_t parse_nexthops(const struct route_attrs *ra, const struct defroute *base,
-			     struct defroute *out)
+                             struct defroute *out)
 {
 	const struct nlattr *mp = ra->tb[RTA_MULTIPATH];
 	size_t n = 0;
@@ -336,7 +336,7 @@ int live_dump(struct live *l, struct nl *nl)
 /* --- resolve --- */
 
 void live_resolve(const struct live *l, const struct config *cfg,
-		  const char *const *netdev, struct ifview *out)
+                  const char *const *netdev, struct ifview *out)
 {
 	for (size_t i = 0; i < cfg->n_devices; i++) {
 		const struct cfg_device *dev = &cfg->devices[i];

@@ -50,7 +50,7 @@ static int attach_event_filter(struct mnl_socket *s)
 		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, RTM_NEWROUTE, 1, 0),
 		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, RTM_DELROUTE, 0, 3),
 		BPF_STMT(BPF_LD | BPF_B | BPF_ABS,
-			 NLMSG_HDRLEN + offsetof(struct rtmsg, rtm_dst_len)),
+		         NLMSG_HDRLEN + offsetof(struct rtmsg, rtm_dst_len)),
 		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, 0),
 		BPF_STMT(BPF_RET | BPF_K, 0),
 		BPF_STMT(BPF_RET | BPF_K, 0xffffffff),
@@ -61,13 +61,13 @@ static int attach_event_filter(struct mnl_socket *s)
 	};
 
 	return setsockopt(mnl_socket_get_fd(s), SOL_SOCKET, SO_ATTACH_FILTER,
-			  &prog, sizeof(prog));
+	                  &prog, sizeof(prog));
 }
 
 int nl_open(struct nl *nl)
 {
 	unsigned groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR |
-			  RTMGRP_IPV4_ROUTE | RTMGRP_IPV6_ROUTE;
+	                  RTMGRP_IPV4_ROUTE | RTMGRP_IPV6_ROUTE;
 	int one = 1;
 
 	memset(nl, 0, sizeof(*nl));
@@ -228,9 +228,9 @@ static void describe_req(const struct nlmsghdr *req, bool capped, char *buf, siz
 		mnl_attr_parse(req, sizeof(*rtm), attr_collect, &t);
 		if (t.tb[RTA_DST])
 			inet_ntop(rtm->rtm_family, mnl_attr_get_payload(t.tb[RTA_DST]),
-				  addr, sizeof(addr));
+			          addr, sizeof(addr));
 		snprintf(buf, len, "%s %s/%u table %u", op, addr, rtm->rtm_dst_len,
-			 t.tb[RTA_TABLE] ? mnl_attr_get_u32(t.tb[RTA_TABLE]) : rtm->rtm_table);
+		         t.tb[RTA_TABLE] ? mnl_attr_get_u32(t.tb[RTA_TABLE]) : rtm->rtm_table);
 		if (t.tb[RTA_NH_ID]) {
 			size_t n = strlen(buf);
 
@@ -241,21 +241,21 @@ static void describe_req(const struct nlmsghdr *req, bool capped, char *buf, siz
 
 		mnl_attr_parse(req, sizeof(*nhm), attr_collect, &t);
 		snprintf(buf, len, "%s id %u", op,
-			 t.tb[NHA_ID] ? mnl_attr_get_u32(t.tb[NHA_ID]) : 0);
+		         t.tb[NHA_ID] ? mnl_attr_get_u32(t.tb[NHA_ID]) : 0);
 		if (t.tb[NHA_GROUP]) {
 			size_t n = strlen(buf);
 
 			snprintf(buf + n, len - n, " group of %zu",
-				 mnl_attr_get_payload_len(t.tb[NHA_GROUP]) /
-				 sizeof(struct nexthop_grp));
+			         mnl_attr_get_payload_len(t.tb[NHA_GROUP]) /
+			         sizeof(struct nexthop_grp));
 		}
 	} else {
 		const struct fib_rule_hdr *frh = mnl_nlmsg_get_payload(req);
 
 		mnl_attr_parse(req, sizeof(*frh), attr_collect, &t);
 		snprintf(buf, len, "%s %s prio %u", op,
-			 frh->family == AF_INET6 ? "v6" : "v4",
-			 t.tb[FRA_PRIORITY] ? mnl_attr_get_u32(t.tb[FRA_PRIORITY]) : 0);
+		         frh->family == AF_INET6 ? "v6" : "v4",
+		         t.tb[FRA_PRIORITY] ? mnl_attr_get_u32(t.tb[FRA_PRIORITY]) : 0);
 	}
 }
 
@@ -386,7 +386,7 @@ void nl_route(struct nl *nl, enum nl_op op, const struct route_spec *r)
 	} else {
 		rtm->rtm_type = r->type;
 		rtm->rtm_scope = (r->type == RTN_UNICAST && !r->has_gw && !r->nh_id) ?
-				 RT_SCOPE_LINK : RT_SCOPE_UNIVERSE;
+		                 RT_SCOPE_LINK : RT_SCOPE_UNIVERSE;
 	}
 
 	mnl_attr_put_u32(nlh, RTA_TABLE, r->table);
@@ -472,7 +472,7 @@ void nl_nexthop(struct nl *nl, enum nl_op op, const struct nexthop_spec *n)
 			mnl_attr_put_u32(nlh, NHA_OIF, n->oif);
 			if (n->has_gw)
 				mnl_attr_put(nlh, NHA_GATEWAY,
-					     n->family == AF_INET ? 4 : 16, n->gw);
+				             n->family == AF_INET ? 4 : 16, n->gw);
 		}
 	}
 

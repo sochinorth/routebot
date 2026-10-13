@@ -245,7 +245,7 @@ static int plan_build(const struct world *w, struct plan *p)
 }
 
 static void prefix_route(const struct world *w, const struct plan *p, const struct prefix *pf,
-			 struct route_spec *r)
+                         struct route_spec *r)
 {
 	memset(r, 0, sizeof(*r));
 	r->family = pf->family;
@@ -336,7 +336,7 @@ static const struct nexthop_spec *nh_find(const struct plan *p, uint32_t id)
 
 /* Set everything in n that old doesn't have identically. */
 static void nexthops_set(struct nl *nl, const struct plan *old, const struct nexthop_spec *n,
-			 size_t nn, struct redo *rd, struct sync_stats *st)
+                         size_t nn, struct redo *rd, struct sync_stats *st)
 {
 	for (size_t j = 0; j < nn; j++) {
 		const struct nexthop_spec *o = nh_find(old, n[j].id);
@@ -355,7 +355,7 @@ static void nexthops_set(struct nl *nl, const struct plan *old, const struct nex
 
 /* Delete everything in o whose id is gone from new. */
 static void nexthops_del(struct nl *nl, const struct nexthop_spec *o, size_t no,
-			 const struct plan *new, struct sync_stats *st)
+                         const struct plan *new, struct sync_stats *st)
 {
 	for (size_t i = 0; i < no; i++) {
 		if (nh_find(new, o[i].id))
@@ -367,8 +367,8 @@ static void nexthops_del(struct nl *nl, const struct nexthop_spec *o, size_t no,
 
 /* Set everything in new that old doesn't have identically. */
 static void small_routes_set(struct nl *nl, const struct route_spec *o, size_t no,
-			     const struct route_spec *n, size_t nn, const struct redo *rd,
-			     struct sync_stats *st)
+                             const struct route_spec *n, size_t nn, const struct redo *rd,
+                             struct sync_stats *st)
 {
 	for (size_t j = 0; j < nn; j++) {
 		size_t i;
@@ -385,7 +385,7 @@ static void small_routes_set(struct nl *nl, const struct route_spec *o, size_t n
 
 /* Delete everything in old whose key is gone from new. */
 static void small_routes_del(struct nl *nl, const struct route_spec *o, size_t no,
-			     const struct route_spec *n, size_t nn, struct sync_stats *st)
+                             const struct route_spec *n, size_t nn, struct sync_stats *st)
 {
 	for (size_t i = 0; i < no; i++) {
 		size_t j;
@@ -402,7 +402,7 @@ static void small_routes_del(struct nl *nl, const struct route_spec *o, size_t n
 
 /* Rules in a but not in b get op applied. */
 static void rules_diff(struct nl *nl, enum nl_op op, const struct rule_spec *a, size_t na,
-		       const struct rule_spec *b, size_t nb, unsigned *count)
+                       const struct rule_spec *b, size_t nb, unsigned *count)
 {
 	for (size_t i = 0; i < na; i++) {
 		size_t j;
@@ -428,8 +428,8 @@ static bool prefixes_comparable(const struct world *old, const struct world *new
 }
 
 static void prefixes_set(struct nl *nl, const struct world *old, const struct plan *opl,
-			 const struct world *new, const struct plan *npl,
-			 const struct redo *rd, struct sync_stats *st)
+                         const struct world *new, const struct plan *npl,
+                         const struct redo *rd, struct sync_stats *st)
 {
 	const struct prefix *op = NULL, *np;
 	size_t no = 0, nn, i = 0, j = 0;
@@ -468,7 +468,7 @@ static void prefixes_set(struct nl *nl, const struct world *old, const struct pl
 }
 
 static void prefixes_del(struct nl *nl, const struct world *old, const struct plan *opl,
-			 const struct world *new, struct sync_stats *st)
+                         const struct world *new, struct sync_stats *st)
 {
 	const struct prefix *op, *np = NULL;
 	size_t no, nn = 0, i = 0, j = 0;
