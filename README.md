@@ -88,9 +88,10 @@ config rule 'misc'
 
 **Groups**
 - `device` entries name a netifd interface or a Linux device, optionally with
-  a `:weight` (1..256, default 1). Without any, the section name is the
-  device. Use `option device` when the name isn't a valid UCI name, such as
-  `pppoe-wan`. A device may belong to several groups.
+  a `:weight` (1..256, default 1). A netifd interface (`wan`) is followed to
+  its current L3 device (`pppoe-wan`) over ubus; any other name is taken as a
+  Linux device. Without any entry, the section name is the device. A device
+  may belong to several groups.
 - `fwmark` is optional. Without it, the group gets no rule of its own and can
   only be used as a target for rules.
 - `buckets`, `timer_idle` and `timer_busy` tune the resilient group (see
@@ -150,8 +151,11 @@ triggers a reload automatically.
 ## Building
 
 routebot depends on [libubox](https://git.openwrt.org/project/libubox.git),
-[libuci](https://git.openwrt.org/project/uci.git) and
-[libmnl](https://netfilter.org/projects/libmnl/).
+[libuci](https://git.openwrt.org/project/uci.git),
+[libubus](https://git.openwrt.org/project/ubus.git) and
+[libmnl](https://netfilter.org/projects/libmnl/). Configure with
+`-DWITH_UBUS=OFF` to build without libubus; device names are then always
+Linux devices.
 
 ### OpenWrt (SDK)
 

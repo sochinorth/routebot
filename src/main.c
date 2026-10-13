@@ -13,7 +13,9 @@
 #include "config.h"
 #include "ifstate.h"
 #include "log.h"
+#include "netifd.h"
 #include "nl.h"
+#include "probe.h"
 #include "sync.h"
 
 #define DEFAULT_CONFIG	"/etc/config/routebot"
@@ -34,6 +36,7 @@ static struct {
 	struct snap synced;	/* what the kernel was last brought to */
 	struct live live;
 	struct nl nl;
+	struct probes *probes;		/* for synced.cfg, or the config being loaded */
 	struct uloop_fd ev_fd;
 	struct uloop_fd sig_fd;
 	struct uloop_timeout repair;
@@ -58,8 +61,12 @@ static struct world world_of(const struct snap *s)
 	return (struct world){ s->cfg, s->ifs, s->netdev, s->member_up };
 }
 
+/* Call before freeing s->cfg. */
 static void snap_release(struct snap *s)
 {
+	if (s->netdev)
+		for (size_t d = 0; d < s->cfg->n_devices; d++)
+			free((char *)s->netdev[d]);
 	free(s->ifs);
 	free(s->netdev);
 	free(s->member_up);
@@ -68,17 +75,26 @@ static void snap_release(struct snap *s)
 	s->member_up = NULL;
 }
 
-/* Fill in what each device resolves to and which members are healthy. */
-static void snap_sources(struct snap *s)
+/*
+ * Fill in what each device resolves to and which members are healthy.
+ * netifd names are copied: they only live until its next change callback.
+ */
+static int snap_sources(struct snap *s)
 {
 	const struct config *cfg = s->cfg;
 	size_t m = 0;
 
-	for (size_t d = 0; d < cfg->n_devices; d++)
-		s->netdev[d] = cfg->devices[d].spec;
+	for (size_t d = 0; d < cfg->n_devices; d++) {
+		const char *l3 = netifd_l3dev(cfg->devices[d].spec);
+
+		s->netdev[d] = strdup(l3 ? l3 : cfg->devices[d].spec);
+		if (!s->netdev[d])
+			return -1;
+	}
 	for (size_t g = 0; g < cfg->n_groups; g++)
 		for (size_t i = 0; i < cfg->groups[g].n_members; i++)
-			s->member_up[m++] = true;
+			s->member_up[m++] = probe_up(rb.probes, g, i);
+	return 0;
 }
 
 static int snap_take(struct snap *s, struct config *cfg)
@@ -89,13 +105,12 @@ static int snap_take(struct snap *s, struct config *cfg)
 	s->ifs = calloc(cfg->n_devices + 1, sizeof(*s->ifs));
 	s->netdev = calloc(cfg->n_devices + 1, sizeof(*s->netdev));
 	s->member_up = calloc(n_members + 1, sizeof(*s->member_up));
-	if (!s->ifs || !s->netdev || !s->member_up) {
+	if (!s->ifs || !s->netdev || !s->member_up || snap_sources(s)) {
 		err("out of memory");
 		snap_release(s);
 		return -1;
 	}
 
-	snap_sources(s);
 	live_resolve(&rb.live, cfg, s->netdev, s->ifs);
 	return 0;
 }
@@ -207,6 +222,62 @@ static void log_changes(const struct snap *old, const struct snap *cur)
 	}
 }
 
+static int read_rp_filter(const char *dev)
+{
+	char path[64];
+	FILE *f;
+	int v = -1;
+
+	snprintf(path, sizeof(path), "/proc/sys/net/ipv4/conf/%s/rp_filter", dev);
+	f = fopen(path, "r");
+	if (!f)
+		return -1;
+	if (fscanf(f, "%d", &v) != 1)
+		v = -1;
+	fclose(f);
+	return v;
+}
+
+static bool device_probed(const struct config *cfg, size_t d)
+{
+	for (size_t g = 0; g < cfg->n_groups; g++) {
+		const struct cfg_group *grp = &cfg->groups[g];
+
+		if (!grp->has_probe[0] && !grp->has_probe[1])
+			continue;
+		for (size_t m = 0; m < grp->n_members; m++)
+			if (grp->members[m].dev == d)
+				return true;
+	}
+	return false;
+}
+
+/*
+ * Probe replies come from the probe target, whose unmarked reverse path
+ * usually points elsewhere (or at a blackhole): rp_filter drops them.
+ * Checked whenever a probed device becomes usable or changes name.
+ */
+static void check_rp_filter(const struct snap *old, const struct snap *cur)
+{
+	for (size_t d = 0; d < cur->cfg->n_devices; d++) {
+		const char *dev = cur->netdev[d];
+		int all, v;
+
+		if (!cur->ifs[d].fam[0].usable || !device_probed(cur->cfg, d))
+			continue;
+		if (old->cfg == cur->cfg && old->ifs[d].fam[0].usable &&
+		    !strcmp(old->netdev[d], dev))
+			continue;
+		all = read_rp_filter("all");
+		v = read_rp_filter(dev);
+		if (all > v)
+			v = all;
+		if (v > 0)
+			warn("%s: rp_filter is %d, probe replies may be dropped; set "
+			     "net.ipv4.conf.%s.rp_filter=0 and conf.all.rp_filter=0", dev, v, dev);
+	}
+}
+
 static void log_sync(const char *why, const struct sync_stats *st)
 {
 	if (st->route_set || st->route_del || st->nh_set || st->nh_del ||
@@ -226,13 +297,19 @@ static void apply(const char *why, struct snap *s)
 	struct sync_stats st;
 
 	log_changes(&rb.synced, s);
+	check_rp_filter(&rb.synced, s);
 	sync_apply(&rb.nl, &old, &new, &st);
 	log_sync(why, &st);
 
+	snap_release(&rb.synced);
 	if (rb.synced.cfg != s->cfg)
 		config_free(rb.synced.cfg);
-	snap_release(&rb.synced);
 	rb.synced = *s;
+
+	/* probes follow links, not health: dead members keep being probed */
+	for (size_t d = 0; d < s->cfg->n_devices; d++)
+		probes_set_link(rb.probes, d, s->netdev[d],
+				s->ifs[d].fam[0].usable || s->ifs[d].fam[1].usable);
 
 	if (st.errors) {
 		warn("will retry in %d seconds", REPAIR_DELAY_MS / 1000);
@@ -283,6 +360,19 @@ static void reconcile_live(const char *why)
 	}
 }
 
+/* A netifd mapping or a probe verdict changed. */
+static void netifd_changed(void)
+{
+	rb.live.dirty = true;
+	reconcile_live("netifd");
+}
+
+static void probes_changed(void)
+{
+	rb.live.dirty = true;
+	reconcile_live("probe");
+}
+
 static void repair_cb(struct uloop_timeout *t)
 {
 	unsigned errors = reassert("repair");
@@ -303,6 +393,7 @@ static bool nhids_moved(const struct config *a, const struct config *b)
 
 static void reload(void)
 {
+	struct probes *old_probes;
 	struct config *cfg;
 	struct snap s;
 
@@ -310,6 +401,16 @@ static void reload(void)
 	cfg = config_load(rb.cfg_path);
 	if (!cfg || (nhids_moved(cfg, rb.synced.cfg) && sync_check_nhids(&rb.nl, cfg))) {
 		err("reload failed, keeping the old config");
+		config_free(cfg);
+		return;
+	}
+
+	/* the old probes point into the old config, which apply() frees */
+	old_probes = rb.probes;
+	rb.probes = probes_new(cfg, probes_changed);
+	if (!rb.probes) {
+		err("out of memory");
+		rb.probes = old_probes;
 		config_free(cfg);
 		return;
 	}
@@ -324,10 +425,13 @@ static void reload(void)
 	rb.live.dirty = false;
 
 	if (snap_take(&s, cfg)) {
+		probes_free(rb.probes);
+		rb.probes = old_probes;
 		config_free(cfg);
 		return;
 	}
 
+	probes_free(old_probes);
 	apply("reload", &s);
 }
 
@@ -409,6 +513,8 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	uloop_init();
+
 	{
 		struct config *cfg = config_load(rb.cfg_path);
 		struct snap s;
@@ -419,7 +525,6 @@ int main(int argc, char **argv)
 			config_free(cfg);
 			return 1;
 		}
-
 		/* events queue up on the socket from here on, nothing is missed */
 		live_init(&rb.live, cfg);
 		if (sync_check_nhids(&rb.nl, cfg)) {
@@ -433,14 +538,18 @@ int main(int argc, char **argv)
 		}
 		rb.live.dirty = false;
 
-		if (snap_take(&s, cfg)) {
+		/* the probes point into cfg: free them first on failure */
+		netifd_init(netifd_changed);
+		rb.probes = probes_new(cfg, probes_changed);
+		if (!rb.probes || snap_take(&s, cfg)) {
+			probes_free(rb.probes);
+			rb.probes = NULL;
 			config_free(cfg);
 			goto out;
 		}
 		apply("startup", &s);
 	}
 
-	uloop_init();
 	rb.repair.cb = repair_cb;
 	rb.ev_fd.fd = nl_event_fd(&rb.nl);
 	rb.ev_fd.cb = ev_cb;
@@ -450,15 +559,18 @@ int main(int argc, char **argv)
 
 	info("running");
 	uloop_run();
-	uloop_done();
 
 	ret = sync_flush(&rb.nl, rb.synced.cfg->rt_proto) ? 1 : 0;
 
 out:
+	probes_free(rb.probes);
+	netifd_done();
+	uloop_done();
 	nl_close(&rb.nl);
 	live_free(&rb.live);
+	if (rb.synced.cfg)
+		snap_release(&rb.synced);
 	config_free(rb.synced.cfg);
-	snap_release(&rb.synced);
 	close(rb.sig_fd.fd);
 	return ret;
 }

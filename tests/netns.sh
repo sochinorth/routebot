@@ -238,6 +238,7 @@ has "id 10005 group 10007/10011,2 $RES" nh
 echo "== reload: probed group"
 GRPS="vpn0 wan0 pool probed"; write_config
 hup; wait_log "sync (reload)"
+wait_log "wan0: rp_filter is 2, probe replies may be dropped"
 has "10001:	from all fwmark 0xfe000000/0xff000000 lookup 10001 proto 233" ip rule
 has "10001:	from all fwmark 0xfe000000/0xff000000 lookup 10001 proto 233" ip -6 rule
 has "default via 192.0.2.1 dev wan0 proto 233 metric 2" ip route show table 10001
@@ -345,6 +346,68 @@ if "$RB" -c "$T/config" >> "$LOG" 2>&1; then fail "started anyway"; else pass "r
 wait_log "nexthop id 10005 has proto 0, not 233"
 if ip rule | grep -q "proto 233"; then fail "rules installed"; else pass "nothing installed"; fi
 ip nexthop del id 10005
+
+echo "== probes: two tunnels answering the same address"
+# far ends in their own netns, both 10.64.0.1; ARP stays on (a veth with
+# arp off sends frames to its own MAC and the peer drops them)
+FAR=
+for i in 1 2; do
+	unshare -n sleep 600 &
+	FAR="$FAR $!"
+	ip link add t$i type veth peer name f$i
+	ip link set f$i netns $!
+	nsenter -t $! -n sh -c "ip link set lo up; ip addr add 10.64.0.1/24 dev f$i; ip link set f$i up"
+	ip addr add 10.64.0.1$i/24 dev t$i
+	ip link set t$i up
+	# replies come from inside a blackholed list: loose rp_filter would drop them
+	sysctl -qw net.ipv4.conf.t$i.rp_filter=0
+	ip route add default via 10.64.0.1 dev t$i metric 10$i
+done
+set -- $FAR
+far() { _p=$1; shift; nsenter -t "$_p" -n "$@"; }
+mkdir -p "$T/tun"; printf '7.7.7.0/24\n10.64.0.0/10\n' > "$T/tun/x.lst"
+cat > "$T/config" <<EOF
+config group 'tun'
+	list device 't1'
+	list device 't2'
+	option fwmark '0x40'
+	option probe '10.64.0.1'
+	option probe_interval '0.2'
+	option probe_count '3'
+
+config rule 'tunneled'
+	option group 'tun'
+	list cidrset '$T/tun/*'
+EOF
+start
+has "id 10001 group 10003/10005 $RES" nh
+has "7.7.7.0/24 nhid 10001 proto 233" ip route show table 10000
+has "default via 10.64.0.1 dev t1 proto 233 metric 1" ip route show table 10001
+tail -n +"$((MARK + 1))" "$LOG" | grep -q "rp_filter is" && fail "rp_filter warned" || pass "rp_filter 0 not warned"
+has "default via 10.64.0.1 dev t2 proto 233 metric 2" ip route show table 10001
+
+mark; far $2 ip addr del 10.64.0.1/24 dev f2
+wait_log "tun: member t2 probe down"
+wait_log "sync (probe): 0 routes set, 0 deleted, 1 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+has "id 10001 group 10003 $RES" nh
+has "7.7.7.0/24 nhid 10001 via 10.64.0.1 dev t1 proto 233" ip route show table 10000
+has "default via 10.64.0.1 dev t2 proto 233 metric 2" ip route show table 10001
+
+mark; far $2 ip addr add 10.64.0.1/24 dev f2
+wait_log "tun: member t2 probe up"
+wait_log "tun: v4 via t1, t2"
+has "id 10001 group 10003/10005 $RES" nh
+
+echo "== probes: all dead -> blackhole, probes still get out"
+mark; far $1 ip addr del 10.64.0.1/24 dev f1; far $2 ip addr del 10.64.0.1/24 dev f2
+wait_log "tun: v4 blackholed"
+has "blackhole 7.7.7.0/24 proto 233" ip route show table 10000
+has "blackhole 10.64.0.0/10 proto 233" ip route show table 10000
+mark; far $1 ip addr add 10.64.0.1/24 dev f1; far $2 ip addr add 10.64.0.1/24 dev f2
+wait_log "tun: v4 via t1, t2"
+has "7.7.7.0/24 nhid 10001 proto 233" ip route show table 10000
+stop
+kill $FAR 2>/dev/null
 
 if grep -q "ERROR: AddressSanitizer\|runtime error:" "$LOG"; then
 	fail "sanitizer reports"; grep -A5 "Sanitizer\|runtime error" "$LOG"
