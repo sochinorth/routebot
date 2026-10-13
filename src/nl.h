@@ -25,6 +25,7 @@ struct route_spec {
 	bool has_gw;
 	uint32_t table;
 	uint32_t nh_id;		/* RTN_UNICAST via a nexthop object; oif/gw unused */
+	uint32_t metric;	/* 0 = kernel default */
 	int oif;
 	uint8_t dst[16];
 	uint8_t gw[16];

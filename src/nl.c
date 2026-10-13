@@ -392,6 +392,8 @@ void nl_route(struct nl *nl, enum nl_op op, const struct route_spec *r)
 	mnl_attr_put_u32(nlh, RTA_TABLE, r->table);
 	if (r->plen)
 		mnl_attr_put(nlh, RTA_DST, alen, r->dst);
+	if (r->metric)
+		mnl_attr_put_u32(nlh, RTA_PRIORITY, r->metric);
 	if (op != NL_DEL && r->type == RTN_UNICAST) {
 		if (r->nh_id) {
 			mnl_attr_put_u32(nlh, RTA_NH_ID, r->nh_id);
