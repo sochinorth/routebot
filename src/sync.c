@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include <linux/fib_rules.h>
+#include <linux/nexthop.h>
 #include <linux/rtnetlink.h>
 
 #include "log.h"
@@ -12,29 +13,259 @@ static const int families[2] = { AF_INET, AF_INET6 };
 
 /* --- rendering --- */
 
-static void render(struct route_spec *r, const struct ifrender *ir)
+size_t cfg_member_index(const struct config *c, size_t g, size_t m)
 {
-	if (ir->usable) {
-		r->type = RTN_UNICAST;
-		r->oif = ir->ifindex;
-		r->has_gw = ir->has_gw;
-		if (ir->has_gw)
-			memcpy(r->gw, ir->gw, sizeof(r->gw));
-	} else {
-		r->type = RTN_BLACKHOLE;
+	for (size_t i = 0; i < g; i++)
+		m += c->groups[i].n_members;
+	return m;
+}
+
+bool world_member_usable(const struct world *w, size_t g, size_t m, int f)
+{
+	const struct cfg_group *grp = &w->cfg->groups[g];
+
+	return w->ifs[grp->members[m].dev].fam[f].usable &&
+	       w->member_up[cfg_member_index(w->cfg, g, m)];
+}
+
+static bool any_probe(const struct config *c)
+{
+	for (size_t g = 0; g < c->n_groups; g++)
+		if (c->groups[g].has_probe[0] || c->groups[g].has_probe[1])
+			return true;
+	return false;
+}
+
+/* Is device d a member of any group, of any probed group if probed? */
+static bool dev_member(const struct config *c, size_t d, bool probed)
+{
+	for (size_t g = 0; g < c->n_groups; g++) {
+		const struct cfg_group *grp = &c->groups[g];
+
+		if (probed && !grp->has_probe[0] && !grp->has_probe[1])
+			continue;
+		for (size_t m = 0; m < grp->n_members; m++)
+			if (grp->members[m].dev == d)
+				return true;
 	}
+	return false;
+}
+
+/* Everything one world renders to, except the prefix routes. */
+struct plan {
+	struct nexthop_spec *members;	/* device nexthops */
+	size_t n_members;
+	struct nexthop_spec *groups;	/* resilient groups */
+	size_t n_groups;
+	uint32_t *group_nh;		/* [2 * g + f]: group nexthop id, 0 = blackhole */
+	struct route_spec *small;	/* group defaults and the probe table */
+	size_t n_small;
+	struct rule_spec *rules;
+	size_t n_rules;
+};
+
+static void gen_members(const struct world *w, struct plan *p)
+{
+	const struct config *c = w->cfg;
+
+	for (size_t d = 0; d < c->n_devices; d++) {
+		if (!dev_member(c, d, false))
+			continue;
+		for (int f = 0; f < 2; f++) {
+			const struct ifrender *ir = &w->ifs[d].fam[f];
+			struct nexthop_spec *n;
+
+			if (!ir->usable)
+				continue;
+			n = &p->members[p->n_members++];
+			n->id = cfg_member_nhid(c, d, f);
+			n->family = families[f];
+			n->proto = c->rt_proto;
+			n->oif = ir->ifindex;
+			n->has_gw = ir->has_gw;
+			if (ir->has_gw)
+				memcpy(n->gw, ir->gw, sizeof(n->gw));
+		}
+	}
+}
+
+static void gen_groups(const struct world *w, struct plan *p)
+{
+	const struct config *c = w->cfg;
+
+	for (size_t g = 0; g < c->n_groups; g++) {
+		const struct cfg_group *grp = &c->groups[g];
+
+		for (int f = 0; f < 2; f++) {
+			struct nexthop_spec *n = &p->groups[p->n_groups];
+
+			for (size_t m = 0; m < grp->n_members && n->n_grp < MAX_NH_GROUP; m++) {
+				if (!world_member_usable(w, g, m, f))
+					continue;
+				n->grp[n->n_grp].id = cfg_member_nhid(c, grp->members[m].dev, f);
+				n->grp[n->n_grp].weight = grp->members[m].weight;
+				n->n_grp++;
+			}
+			if (!n->n_grp)
+				continue;
+
+			n->id = cfg_group_nhid(c, g, f);
+			n->family = families[f];	/* bookkeeping, sent as AF_UNSPEC */
+			n->proto = c->rt_proto;
+			n->buckets = grp->buckets;
+			n->timer_idle = grp->timer_idle;
+			n->timer_busy = grp->timer_busy;
+			p->group_nh[2 * g + f] = n->id;
+			p->n_groups++;
+		}
+	}
+}
+
+/* Unicast via the group's nexthop if it has one, blackhole otherwise. */
+static void render(struct route_spec *r, const struct plan *p, size_t g, int f)
+{
+	r->nh_id = p->group_nh[2 * g + f];
+	r->type = r->nh_id ? RTN_UNICAST : RTN_BLACKHOLE;
+}
+
+static void gen_small(const struct world *w, struct plan *p)
+{
+	const struct config *c = w->cfg;
+
+	for (size_t g = 0; g < c->n_groups; g++) {
+		if (!c->groups[g].fwmark)
+			continue;
+		for (int f = 0; f < 2; f++) {
+			struct route_spec *r = &p->small[p->n_small++];
+
+			r->family = families[f];
+			r->table = cfg_group_table(c, g);
+			r->proto = c->rt_proto;
+			render(r, p, g, f);
+		}
+	}
+
+	if (!any_probe(c))
+		return;
+
+	/* one route per link, probe health aside: dead members keep being probed */
+	for (size_t d = 0; d < c->n_devices; d++) {
+		if (!dev_member(c, d, true))
+			continue;
+		for (int f = 0; f < 2; f++) {
+			const struct ifrender *ir = &w->ifs[d].fam[f];
+			struct route_spec *r;
+
+			if (!ir->usable)
+				continue;
+			r = &p->small[p->n_small++];
+			r->family = families[f];
+			r->type = RTN_UNICAST;
+			r->table = cfg_probe_table(c);
+			r->proto = c->rt_proto;
+			r->metric = d + 1;
+			r->oif = ir->ifindex;
+			r->has_gw = ir->has_gw;
+			if (ir->has_gw)
+				memcpy(r->gw, ir->gw, sizeof(r->gw));
+		}
+	}
+}
+
+static void gen_rules(const struct config *c, struct plan *p)
+{
+	bool probe = any_probe(c);
+
+	for (int f = 0; f < 2; f++) {
+		for (size_t g = 0; g < c->n_groups; g++) {
+			if (!c->groups[g].fwmark)
+				continue;
+			p->rules[p->n_rules++] = (struct rule_spec){
+				.family = families[f],
+				.proto = c->rt_proto,
+				.prio = cfg_group_prio(c, g),
+				.mark = c->groups[g].fwmark,
+				.mask = c->fwmask,
+				.table = cfg_group_table(c, g),
+			};
+		}
+		if (probe)
+			p->rules[p->n_rules++] = (struct rule_spec){
+				.family = families[f],
+				.proto = c->rt_proto,
+				.prio = cfg_probe_prio(c),
+				.mark = c->probe_mark,
+				.mask = c->fwmask,
+				.table = cfg_probe_table(c),
+			};
+		p->rules[p->n_rules++] = (struct rule_spec){
+			.family = families[f],
+			.proto = c->rt_proto,
+			.prio = c->rule_prio,
+			.mark = 0,
+			.mask = c->fwmask,
+			.table = c->table_id,
+		};
+	}
+}
+
+static void plan_free(struct plan *p)
+{
+	free(p->members);
+	free(p->groups);
+	free(p->group_nh);
+	free(p->small);
+	free(p->rules);
+	memset(p, 0, sizeof(*p));
+}
+
+static int plan_build(const struct world *w, struct plan *p)
+{
+	const struct config *c = w->cfg;
+	size_t nd = c ? c->n_devices : 0, ng = c ? c->n_groups : 0;
+
+	memset(p, 0, sizeof(*p));
+	p->members = calloc(2 * nd + 1, sizeof(*p->members));
+	p->groups = calloc(2 * ng + 1, sizeof(*p->groups));
+	p->group_nh = calloc(2 * ng + 1, sizeof(*p->group_nh));
+	p->small = calloc(2 * (ng + nd) + 1, sizeof(*p->small));
+	p->rules = calloc(2 * (ng + 2), sizeof(*p->rules));
+	if (!p->members || !p->groups || !p->group_nh || !p->small || !p->rules) {
+		plan_free(p);
+		return -1;
+	}
+
+	if (c) {
+		gen_members(w, p);
+		gen_groups(w, p);
+		gen_small(w, p);
+		gen_rules(c, p);
+	}
+	return 0;
+}
+
+static void prefix_route(const struct world *w, const struct plan *p, const struct prefix *pf,
+			 struct route_spec *r)
+{
+	memset(r, 0, sizeof(*r));
+	r->family = pf->family;
+	r->plen = pf->plen;
+	memcpy(r->dst, pf->addr, family_alen(pf->family));
+	r->table = w->cfg->table_id;
+	r->proto = w->cfg->rt_proto;
+	render(r, p, pf->group, fam_idx(pf->family));
 }
 
 static bool route_key_eq(const struct route_spec *a, const struct route_spec *b)
 {
 	return a->family == b->family && a->plen == b->plen && a->table == b->table &&
-	       !memcmp(a->dst, b->dst, sizeof(a->dst));
+	       a->metric == b->metric && !memcmp(a->dst, b->dst, sizeof(a->dst));
 }
 
 static bool route_eq(const struct route_spec *a, const struct route_spec *b)
 {
 	return route_key_eq(a, b) && a->proto == b->proto && a->type == b->type &&
-	       a->oif == b->oif && a->has_gw == b->has_gw &&
+	       a->nh_id == b->nh_id && a->oif == b->oif && a->has_gw == b->has_gw &&
 	       !memcmp(a->gw, b->gw, sizeof(a->gw));
 }
 
@@ -44,81 +275,100 @@ static bool rule_eq(const struct rule_spec *a, const struct rule_spec *b)
 	       a->mark == b->mark && a->mask == b->mask && a->table == b->table;
 }
 
-static size_t gen_rules(const struct world *w, struct rule_spec *out)
+static bool nh_eq(const struct nexthop_spec *a, const struct nexthop_spec *b)
 {
-	const struct config *c = w->cfg;
-	size_t n = 0;
-
-	if (!c)
-		return 0;
-
-	for (int f = 0; f < 2; f++) {
-		for (size_t i = 0; i < c->n_ifaces; i++) {
-			if (!c->ifaces[i].fwmark)
-				continue;
-			out[n++] = (struct rule_spec){
-				.family = families[f],
-				.proto = c->rt_proto,
-				.prio = cfg_iface_prio(c, i),
-				.mark = c->ifaces[i].fwmark,
-				.mask = c->fwmask,
-				.table = cfg_iface_table(c, i),
-			};
-		}
-		out[n++] = (struct rule_spec){
-			.family = families[f],
-			.proto = c->rt_proto,
-			.prio = c->rule_prio,
-			.mark = 0,
-			.mask = c->fwmask,
-			.table = c->table_id,
-		};
-	}
-
-	return n;
+	if (a->id != b->id || a->family != b->family || a->proto != b->proto ||
+	    a->oif != b->oif || a->has_gw != b->has_gw || memcmp(a->gw, b->gw, sizeof(a->gw)) ||
+	    a->n_grp != b->n_grp || a->buckets != b->buckets ||
+	    a->timer_idle != b->timer_idle || a->timer_busy != b->timer_busy)
+		return false;
+	for (size_t i = 0; i < a->n_grp; i++)
+		if (a->grp[i].id != b->grp[i].id || a->grp[i].weight != b->grp[i].weight)
+			return false;
+	return true;
 }
 
-static size_t gen_defaults(const struct world *w, struct route_spec *out)
+/* Can the kernel turn a into b with a replace? */
+static bool nh_replaceable(const struct nexthop_spec *a, const struct nexthop_spec *b)
 {
-	const struct config *c = w->cfg;
-	size_t n = 0;
-
-	if (!c)
-		return 0;
-
-	for (size_t i = 0; i < c->n_ifaces; i++) {
-		if (!c->ifaces[i].fwmark)
-			continue;
-		for (int f = 0; f < 2; f++) {
-			struct route_spec *r = &out[n++];
-
-			memset(r, 0, sizeof(*r));
-			r->family = families[f];
-			r->table = cfg_iface_table(c, i);
-			r->proto = c->rt_proto;
-			render(r, &w->ifs[i].fam[f]);
-		}
-	}
-
-	return n;
-}
-
-static void prefix_route(const struct world *w, const struct prefix *p, struct route_spec *r)
-{
-	memset(r, 0, sizeof(*r));
-	r->family = p->family;
-	r->plen = p->plen;
-	memcpy(r->dst, p->addr, family_alen(p->family));
-	r->table = w->cfg->table_id;
-	r->proto = w->cfg->rt_proto;
-	render(r, &w->ifs[p->iface].fam[fam_idx(p->family)]);
+	return !a->n_grp == !b->n_grp && a->family == b->family && a->proto == b->proto &&
+	       a->buckets == b->buckets;
 }
 
 /* --- diffing --- */
 
+/*
+ * Nexthop ids deleted and created anew in this apply. The kernel drops
+ * routes using a deleted nexthop and removes it from its groups, so those
+ * have to be set again even if their rendering is unchanged.
+ */
+struct redo {
+	uint32_t *ids;
+	size_t n;
+};
+
+static bool redo_has(const struct redo *rd, uint32_t id)
+{
+	for (size_t i = 0; id && i < rd->n; i++)
+		if (rd->ids[i] == id)
+			return true;
+	return false;
+}
+
+static bool redo_grp(const struct redo *rd, const struct nexthop_spec *n)
+{
+	for (size_t i = 0; i < n->n_grp; i++)
+		if (redo_has(rd, n->grp[i].id))
+			return true;
+	return false;
+}
+
+static const struct nexthop_spec *nh_find(const struct plan *p, uint32_t id)
+{
+	for (size_t i = 0; i < p->n_members; i++)
+		if (p->members[i].id == id)
+			return &p->members[i];
+	for (size_t i = 0; i < p->n_groups; i++)
+		if (p->groups[i].id == id)
+			return &p->groups[i];
+	return NULL;
+}
+
+/* Set everything in n that old doesn't have identically. */
+static void nexthops_set(struct nl *nl, const struct plan *old, const struct nexthop_spec *n,
+			 size_t nn, struct redo *rd, struct sync_stats *st)
+{
+	for (size_t j = 0; j < nn; j++) {
+		const struct nexthop_spec *o = nh_find(old, n[j].id);
+
+		if (o && nh_eq(o, &n[j]) && !redo_grp(rd, &n[j]))
+			continue;
+		if (o && !nh_replaceable(o, &n[j])) {
+			nl_nexthop(nl, NL_DEL, o);
+			st->nh_del++;
+			rd->ids[rd->n++] = o->id;
+		}
+		nl_nexthop(nl, NL_SET, &n[j]);
+		st->nh_set++;
+	}
+}
+
+/* Delete everything in o whose id is gone from new. */
+static void nexthops_del(struct nl *nl, const struct nexthop_spec *o, size_t no,
+			 const struct plan *new, struct sync_stats *st)
+{
+	for (size_t i = 0; i < no; i++) {
+		if (nh_find(new, o[i].id))
+			continue;
+		nl_nexthop(nl, NL_DEL, &o[i]);
+		st->nh_del++;
+	}
+}
+
 /* Set everything in new that old doesn't have identically. */
 static void small_routes_set(struct nl *nl, const struct route_spec *o, size_t no,
-			     const struct route_spec *n, size_t nn, struct sync_stats *st)
+			     const struct route_spec *n, size_t nn, const struct redo *rd,
+			     struct sync_stats *st)
 {
 	for (size_t j = 0; j < nn; j++) {
 		size_t i;
@@ -126,7 +376,7 @@ static void small_routes_set(struct nl *nl, const struct route_spec *o, size_t n
 		for (i = 0; i < no; i++)
 			if (route_eq(&o[i], &n[j]))
 				break;
-		if (i == no) {
+		if (i == no || redo_has(rd, n[j].nh_id)) {
 			nl_route(nl, NL_SET, &n[j]);
 			st->route_set++;
 		}
@@ -177,8 +427,9 @@ static bool prefixes_comparable(const struct world *old, const struct world *new
 	       old->cfg->rt_proto == new->cfg->rt_proto;
 }
 
-static void prefixes_set(struct nl *nl, const struct world *old, const struct world *new,
-			 struct sync_stats *st)
+static void prefixes_set(struct nl *nl, const struct world *old, const struct plan *opl,
+			 const struct world *new, const struct plan *npl,
+			 const struct redo *rd, struct sync_stats *st)
 {
 	const struct prefix *op = NULL, *np;
 	size_t no = 0, nn, i = 0, j = 0;
@@ -201,11 +452,11 @@ static void prefixes_set(struct nl *nl, const struct world *old, const struct wo
 			continue;
 		}
 
-		prefix_route(new, &np[j], &rn);
+		prefix_route(new, npl, &np[j], &rn);
 		if (cmp == 0) {
-			prefix_route(old, &op[i], &ro);
+			prefix_route(old, opl, &op[i], &ro);
 			i++;
-			if (route_eq(&ro, &rn)) {
+			if (route_eq(&ro, &rn) && !redo_has(rd, rn.nh_id)) {
 				j++;
 				continue;
 			}
@@ -216,8 +467,8 @@ static void prefixes_set(struct nl *nl, const struct world *old, const struct wo
 	}
 }
 
-static void prefixes_del(struct nl *nl, const struct world *old, const struct world *new,
-			 struct sync_stats *st)
+static void prefixes_del(struct nl *nl, const struct world *old, const struct plan *opl,
+			 const struct world *new, struct sync_stats *st)
 {
 	const struct prefix *op, *np = NULL;
 	size_t no, nn = 0, i = 0, j = 0;
@@ -244,7 +495,7 @@ static void prefixes_del(struct nl *nl, const struct world *old, const struct wo
 			j++;
 			continue;
 		}
-		prefix_route(old, &op[i], &ro);
+		prefix_route(old, opl, &op[i], &ro);
 		nl_route(nl, NL_DEL, &ro);
 		st->route_del++;
 		i++;
@@ -254,49 +505,60 @@ static void prefixes_del(struct nl *nl, const struct world *old, const struct wo
 void sync_apply(struct nl *nl, const struct world *old, const struct world *new,
 		struct sync_stats *st)
 {
-	size_t no_if = old->cfg ? old->cfg->n_ifaces : 0;
-	size_t nn_if = new->cfg ? new->cfg->n_ifaces : 0;
-	struct rule_spec *ro, *rn;
-	struct route_spec *dro, *drn;
-	size_t n_ro, n_rn, n_dro, n_drn;
+	struct plan po, pn;
+	struct redo rd = {};
 
 	memset(st, 0, sizeof(*st));
 
-	ro = calloc(2 * (no_if + 1), sizeof(*ro));
-	rn = calloc(2 * (nn_if + 1), sizeof(*rn));
-	dro = calloc(2 * no_if + 1, sizeof(*dro));
-	drn = calloc(2 * nn_if + 1, sizeof(*drn));
-	if (!ro || !rn || !dro || !drn) {
+	if (plan_build(old, &po)) {
+		err("out of memory");
+		st->errors++;
+		return;
+	}
+	if (plan_build(new, &pn)) {
+		err("out of memory");
+		st->errors++;
+		plan_free(&po);
+		return;
+	}
+	rd.ids = calloc(po.n_members + po.n_groups + 1, sizeof(*rd.ids));
+	if (!rd.ids) {
 		err("out of memory");
 		st->errors++;
 		goto out;
 	}
 
-	n_ro = gen_rules(old, ro);
-	n_rn = gen_rules(new, rn);
-	n_dro = gen_defaults(old, dro);
-	n_drn = gen_defaults(new, drn);
-
 	nl_batch_begin(nl);
 
-	/* make before break: fill tables, then point rules at them, then clean up */
-	small_routes_set(nl, dro, n_dro, drn, n_drn, st);
-	prefixes_set(nl, old, new, st);
-	rules_diff(nl, NL_SET, rn, n_rn, ro, n_ro, &st->rule_add);
-	rules_diff(nl, NL_DEL, ro, n_ro, rn, n_rn, &st->rule_del);
-	small_routes_del(nl, dro, n_dro, drn, n_drn, st);
-	prefixes_del(nl, old, new, st);
+	/*
+	 * make before break: nexthops bottom up, fill tables, then point rules
+	 * at them, then clean up top down
+	 */
+	nexthops_set(nl, &po, pn.members, pn.n_members, &rd, st);
+	nexthops_set(nl, &po, pn.groups, pn.n_groups, &rd, st);
+	small_routes_set(nl, po.small, po.n_small, pn.small, pn.n_small, &rd, st);
+	prefixes_set(nl, old, &po, new, &pn, &rd, st);
+	rules_diff(nl, NL_SET, pn.rules, pn.n_rules, po.rules, po.n_rules, &st->rule_add);
+	rules_diff(nl, NL_DEL, po.rules, po.n_rules, pn.rules, pn.n_rules, &st->rule_del);
+	small_routes_del(nl, po.small, po.n_small, pn.small, pn.n_small, st);
+	prefixes_del(nl, old, &po, new, st);
+	nexthops_del(nl, po.groups, po.n_groups, &pn, st);
+	nexthops_del(nl, po.members, po.n_members, &pn, st);
 
 	st->errors = nl_batch_end(nl);
 
 out:
-	free(ro);
-	free(rn);
-	free(dro);
-	free(drn);
+	free(rd.ids);
+	plan_free(&po);
+	plan_free(&pn);
 }
 
 /* --- flush --- */
+
+struct flush_nh {
+	uint32_t id;
+	bool group;
+};
 
 struct flush_ctx {
 	uint8_t proto;
@@ -304,6 +566,8 @@ struct flush_ctx {
 	size_t n_routes, cap_routes;
 	struct rule_spec *rules;
 	size_t n_rules, cap_rules;
+	struct flush_nh *nhs;
+	size_t n_nhs, cap_nhs, n_groups;
 	bool oom;
 };
 
@@ -357,6 +621,7 @@ static int flush_route_cb(const struct nlmsghdr *nlh, void *data)
 	r->plen = rtm->rtm_dst_len;
 	r->proto = rtm->rtm_protocol;
 	r->table = t.tb[RTA_TABLE] ? mnl_attr_get_u32(t.tb[RTA_TABLE]) : rtm->rtm_table;
+	r->metric = t.tb[RTA_PRIORITY] ? mnl_attr_get_u32(t.tb[RTA_PRIORITY]) : 0;
 	if (t.tb[RTA_DST] && mnl_attr_get_payload_len(t.tb[RTA_DST]) <= sizeof(r->dst))
 		memcpy(r->dst, mnl_attr_get_payload(t.tb[RTA_DST]),
 		       mnl_attr_get_payload_len(t.tb[RTA_DST]));
@@ -392,6 +657,40 @@ static int flush_rule_cb(const struct nlmsghdr *nlh, void *data)
 	return MNL_CB_OK;
 }
 
+static int flush_nh_cb(const struct nlmsghdr *nlh, void *data)
+{
+	struct flush_ctx *fc = data;
+	const struct nhmsg *nhm = mnl_nlmsg_get_payload(nlh);
+	struct attrs t = {};
+	struct flush_nh *nn;
+
+	if (nhm->nh_protocol != fc->proto)
+		return MNL_CB_OK;
+	mnl_attr_parse(nlh, sizeof(*nhm), attrs_cb, &t);
+	if (!t.tb[NHA_ID])
+		return MNL_CB_OK;
+
+	nn = grow(fc->nhs, &fc->cap_nhs, fc->n_nhs, sizeof(*nn));
+	if (!nn) {
+		fc->oom = true;
+		return MNL_CB_ERROR;
+	}
+	fc->nhs = nn;
+	fc->nhs[fc->n_nhs++] = (struct flush_nh){
+		.id = mnl_attr_get_u32(t.tb[NHA_ID]),
+		.group = !!t.tb[NHA_GROUP],
+	};
+	fc->n_groups += !!t.tb[NHA_GROUP];
+	return MNL_CB_OK;
+}
+
+static void flush_free(struct flush_ctx *fc)
+{
+	free(fc->routes);
+	free(fc->rules);
+	free(fc->nhs);
+}
+
 int sync_flush(struct nl *nl, uint8_t proto)
 {
 	char buf[128] __attribute__((aligned(4)));
@@ -420,24 +719,87 @@ int sync_flush(struct nl *nl, uint8_t proto)
 	if (ret)
 		goto fail;
 
+	/* nothing to flush on kernels without nexthop objects */
+	ret = nl_dump_nexthops(nl, flush_nh_cb, &fc);
+	if (ret && ret != -EOPNOTSUPP)
+		goto fail;
+
+	/* groups before their members, so no group ever empties under us */
 	nl_batch_begin(nl);
 	for (size_t i = 0; i < fc.n_rules; i++)
 		nl_rule(nl, NL_DEL, &fc.rules[i]);
 	for (size_t i = 0; i < fc.n_routes; i++)
 		nl_route(nl, NL_DEL, &fc.routes[i]);
+	for (size_t i = 0; i < fc.n_nhs; i++)
+		if (fc.nhs[i].group)
+			nl_nexthop(nl, NL_DEL, &(struct nexthop_spec){ .id = fc.nhs[i].id });
+	for (size_t i = 0; i < fc.n_nhs; i++)
+		if (!fc.nhs[i].group)
+			nl_nexthop(nl, NL_DEL, &(struct nexthop_spec){ .id = fc.nhs[i].id });
 	errors = nl_batch_end(nl);
 
-	if (fc.n_rules || fc.n_routes)
-		info("flush: removed %zu rules, %zu routes with proto %u%s",
-		     fc.n_rules, fc.n_routes, proto, errors ? " (with errors)" : "");
+	if (fc.n_rules || fc.n_routes || fc.n_nhs)
+		info("flush: removed %zu rules, %zu routes, %zu nexthops with proto %u%s",
+		     fc.n_rules, fc.n_routes, fc.n_nhs, proto, errors ? " (with errors)" : "");
 
-	free(fc.routes);
-	free(fc.rules);
+	flush_free(&fc);
 	return errors ? -EIO : 0;
 
 fail:
 	err("flush: dump failed: %s", fc.oom ? "out of memory" : strerror(-ret));
-	free(fc.routes);
-	free(fc.rules);
+	flush_free(&fc);
 	return ret;
+}
+
+/* --- nexthop id ownership --- */
+
+struct nhid_ctx {
+	const struct config *cfg;
+	uint32_t id;		/* first foreign id found, 0 = none */
+	uint8_t proto;
+};
+
+static int nhid_cb(const struct nlmsghdr *nlh, void *data)
+{
+	struct nhid_ctx *nc = data;
+	const struct nhmsg *nhm = mnl_nlmsg_get_payload(nlh);
+	struct attrs t = {};
+	uint32_t id;
+
+	if (nc->id || nhm->nh_protocol == nc->cfg->rt_proto)
+		return MNL_CB_OK;
+	mnl_attr_parse(nlh, sizeof(*nhm), attrs_cb, &t);
+	if (!t.tb[NHA_ID])
+		return MNL_CB_OK;
+	id = mnl_attr_get_u32(t.tb[NHA_ID]);
+	if (id > nc->cfg->nexthop_id && id <= cfg_nhid_end(nc->cfg)) {
+		nc->id = id;
+		nc->proto = nhm->nh_protocol;
+	}
+	return MNL_CB_OK;
+}
+
+int sync_check_nhids(struct nl *nl, const struct config *cfg)
+{
+	struct nhid_ctx nc = { .cfg = cfg };
+	int ret;
+
+	ret = nl_dump_nexthops(nl, nhid_cb, &nc);
+	if (ret == -EOPNOTSUPP) {
+		if (!cfg->n_groups)
+			return 0;
+		err("kernel lacks nexthop objects (need >= 5.13)");
+		return -1;
+	}
+	if (ret) {
+		err("nexthop dump failed: %s", strerror(-ret));
+		return -1;
+	}
+	if (nc.id) {
+		err("nexthop id %u has proto %u, not %u: nexthop_id range %u..%llu "
+		    "must be routebot's alone", nc.id, nc.proto, cfg->rt_proto,
+		    cfg->nexthop_id + 1, (unsigned long long)cfg_nhid_end(cfg));
+		return -1;
+	}
+	return 0;
 }
