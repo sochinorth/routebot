@@ -9,6 +9,13 @@
 
 #define MAX_NEXTHOPS 16
 
+#ifndef IFF_LOWER_UP
+#define IFF_LOWER_UP 0x10000	/* missing from glibc's net/if.h */
+#endif
+
+/* the kernel flushes nexthops on a device that loses either */
+#define LINK_USABLE (IFF_UP | IFF_LOWER_UP)
+
 void live_init(struct live *l, const struct config *cfg)
 {
 	memset(l, 0, sizeof(*l));
@@ -100,6 +107,9 @@ static void handle_link(struct live *l, const struct nlmsghdr *nlh)
 		if ((lk->flags ^ ifi->ifi_flags) & IFF_UP)
 			debug("link %s (%d) %s", name ? name : lk->name, lk->ifindex,
 			      ifi->ifi_flags & IFF_UP ? "up" : "down");
+		if ((lk->flags & LINK_USABLE) == LINK_USABLE &&
+		    (ifi->ifi_flags & LINK_USABLE) != LINK_USABLE)
+			lk->downs++;
 		lk->flags = ifi->ifi_flags;
 		l->dirty = true;
 	}
@@ -271,11 +281,14 @@ int live_event_cb(const struct nlmsghdr *nlh, void *data)
 int live_dump(struct live *l, struct nl *nl)
 {
 	char buf[256] __attribute__((aligned(4)));
+	struct link *old = l->links;
+	size_t n_old = l->n_links;
 	struct nlmsghdr *nlh;
 	struct ifinfomsg *ifi;
 	struct rtmsg *rtm;
 	int ret;
 
+	l->links = NULL;
 	l->n_links = 0;
 	l->n_defroutes = 0;
 	l->dirty = true;
@@ -286,6 +299,16 @@ int live_dump(struct live *l, struct nl *nl)
 	ifi = mnl_nlmsg_put_extra_header(nlh, sizeof(*ifi));
 	ifi->ifi_family = AF_UNSPEC;
 	ret = nl_dump(nl, nlh, live_event_cb, l);
+
+	/* down counters survive re-dumps */
+	for (size_t i = 0; i < n_old; i++) {
+		struct link *lk = link_find(l, old[i].ifindex);
+
+		if (lk)
+			lk->downs = old[i].downs;
+	}
+	free(old);
+
 	if (ret) {
 		err("netlink: link dump failed: %s", strerror(-ret));
 		return ret;
@@ -312,14 +335,17 @@ int live_dump(struct live *l, struct nl *nl)
 
 /* --- resolve --- */
 
-void live_resolve(const struct live *l, const struct config *cfg, struct ifview *out)
+void live_resolve(const struct live *l, const struct config *cfg,
+		  const char *const *netdev, struct ifview *out)
 {
-	for (size_t i = 0; i < cfg->n_ifaces; i++) {
-		const struct cfg_iface *ifc = &cfg->ifaces[i];
-		const struct link *lk = link_by_name(l, ifc->device);
+	for (size_t i = 0; i < cfg->n_devices; i++) {
+		const struct cfg_device *dev = &cfg->devices[i];
+		const struct link *lk = NULL;
 
 		memset(&out[i], 0, sizeof(out[i]));
-		if (!lk || !(lk->flags & IFF_UP))
+		if (netdev[i] && *netdev[i])
+			lk = link_by_name(l, netdev[i]);
+		if (!lk || (lk->flags & LINK_USABLE) != LINK_USABLE)
 			continue;
 
 		for (int f = 0; f < 2; f++) {
@@ -327,9 +353,9 @@ void live_resolve(const struct live *l, const struct config *cfg, struct ifview 
 			struct ifrender *r = &out[i].fam[f];
 			const struct defroute *best = NULL;
 
-			if (ifc->has_gw[f]) {
+			if (dev->has_gw[f]) {
 				r->has_gw = true;
-				memcpy(r->gw, ifc->gw[f], sizeof(r->gw));
+				memcpy(r->gw, dev->gw[f], sizeof(r->gw));
 			} else {
 				for (size_t j = 0; j < l->n_defroutes; j++) {
 					const struct defroute *d = &l->defroutes[j];
@@ -351,6 +377,7 @@ void live_resolve(const struct live *l, const struct config *cfg, struct ifview 
 				r->ifindex = lk->ifindex;
 			else
 				memset(r, 0, sizeof(*r));
+			r->downs = lk->downs;
 		}
 	}
 }

@@ -12,6 +12,7 @@
 struct link {
 	int ifindex;
 	unsigned flags;
+	unsigned downs;		/* times it lost IFF_UP or IFF_LOWER_UP */
 	char name[IF_NAMESIZE];
 };
 
@@ -36,12 +37,13 @@ struct live {
 	bool resync;		/* events were lost or addresses removed */
 };
 
-/* What one interface looks like to the routing tables, per family. */
+/* What one device looks like to the routing tables, per family. */
 struct ifrender {
 	bool usable;
 	bool has_gw;
 	int ifindex;
 	uint8_t gw[16];
+	unsigned downs;		/* link's down counter; not part of the rendering */
 };
 
 struct ifview {
@@ -62,9 +64,14 @@ int live_dump(struct live *l, struct nl *nl);
 /* mnl callback for the event socket. */
 int live_event_cb(const struct nlmsghdr *nlh, void *data);
 
-/* Compute the per-interface view for cfg; out has cfg->n_ifaces entries. */
-void live_resolve(const struct live *l, const struct config *cfg, struct ifview *out);
+/*
+ * Compute the per-device view for cfg; out has cfg->n_devices entries.
+ * netdev[d] names device d's kernel netdev; NULL or "" = unresolved.
+ */
+void live_resolve(const struct live *l, const struct config *cfg,
+		  const char *const *netdev, struct ifview *out);
 
+/* Ignores downs. */
 bool ifrender_eq(const struct ifrender *a, const struct ifrender *b);
 
 #endif
