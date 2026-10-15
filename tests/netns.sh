@@ -140,31 +140,32 @@ config rule 'pooled'
 EOF
 }
 
-# devices vpn0, wan0, vpn1: groups get nexthop ids 10001.., members 10007..
+# devices vpn0, wan0, vpn1 get nexthop ids 10001, 10005, 10009;
+# groups vpn0, wan0, pool get 10003, 10007, 10011 (+1 for v6)
 GRPS="vpn0 wan0 pool"
 write_config
 
 echo "== startup"
 start
-has "1.0.0.0/24 nhid 10001 dev vpn0 proto 233" ip route show table 10000
-has "1.1.1.0/24 nhid 10001 dev vpn0 proto 233" ip route show table 10000
-has "10.0.0.0/8 nhid 10001 dev vpn0 proto 233" ip route show table 10000
-has "8.8.8.0/24 nhid 10001 dev vpn0 proto 233" ip route show table 10000
-has "9.9.9.0/24 nhid 10003 via 192.0.2.1 dev wan0 proto 233" ip route show table 10000
-has "5.5.5.0/24 nhid 10005 proto 233" ip route show table 10000
-has "2606:4700::/32 nhid 10002 proto 233 metric 1024 pref medium" ip -6 route show table 10000
-has "default nhid 10001 dev vpn0 proto 233" ip route show table 10002
-has "default nhid 10003 via 192.0.2.1 dev wan0 proto 233" ip route show table 10003
-has "default nhid 10004 proto 233 metric 1024 pref medium" ip -6 route show table 10003
-has "default nhid 10005 proto 233" ip route show table 10004
-has "default nhid 10006 proto 233 metric 1024 pref medium" ip -6 route show table 10004
-has "id 10001 group 10007 $RES" nh
-has "id 10005 group 10007/10011,2 $RES" nh
-has "id 10006 group 10008/10012,2 $RES" nh
-has "id 10007 dev vpn0 scope host proto 233" nh
-has "id 10009 via 192.0.2.1 dev wan0 scope link proto 233" nh
-has "id 10010 via 2001:db8::1 dev wan0 scope link proto 233" nh
-has "id 10012 dev vpn1 scope link proto 233" nh
+has "1.0.0.0/24 nhid 10003 dev vpn0 proto 233" ip route show table 10000
+has "1.1.1.0/24 nhid 10003 dev vpn0 proto 233" ip route show table 10000
+has "10.0.0.0/8 nhid 10003 dev vpn0 proto 233" ip route show table 10000
+has "8.8.8.0/24 nhid 10003 dev vpn0 proto 233" ip route show table 10000
+has "9.9.9.0/24 nhid 10007 via 192.0.2.1 dev wan0 proto 233" ip route show table 10000
+has "5.5.5.0/24 nhid 10011 proto 233" ip route show table 10000
+has "2606:4700::/32 nhid 10004 proto 233 metric 1024 pref medium" ip -6 route show table 10000
+has "default nhid 10003 dev vpn0 proto 233" ip route show table 10002
+has "default nhid 10007 via 192.0.2.1 dev wan0 proto 233" ip route show table 10003
+has "default nhid 10008 proto 233 metric 1024 pref medium" ip -6 route show table 10003
+has "default nhid 10011 proto 233" ip route show table 10004
+has "default nhid 10012 proto 233 metric 1024 pref medium" ip -6 route show table 10004
+has "id 10003 group 10001 $RES" nh
+has "id 10011 group 10001/10009,2 $RES" nh
+has "id 10012 group 10002/10010,2 $RES" nh
+has "id 10001 dev vpn0 scope host proto 233" nh
+has "id 10005 via 192.0.2.1 dev wan0 scope link proto 233" nh
+has "id 10006 via 2001:db8::1 dev wan0 scope link proto 233" nh
+has "id 10010 dev vpn1 scope link proto 233" nh
 has "10000:	from all fwmark 0/0xff000000 lookup 10000 proto 233" ip rule
 has "10000:	from all fwmark 0/0xff000000 lookup 10000 proto 233" ip -6 rule
 has "10002:	from all fwmark 0x12000000/0xff000000 lookup 10002 proto 233" ip rule
@@ -185,59 +186,59 @@ wait_log "pool: v6 via vpn1"
 has "blackhole 1.0.0.0/24 proto 233" ip route show table 10000
 has "blackhole 2606:4700::/32 dev lo proto 233 metric 1024 pref medium" ip -6 route show table 10000
 has "blackhole default proto 233" ip route show table 10002
-has "9.9.9.0/24 nhid 10003 via 192.0.2.1 dev wan0 proto 233" ip route show table 10000
+has "9.9.9.0/24 nhid 10007 via 192.0.2.1 dev wan0 proto 233" ip route show table 10000
 # same nexthop, now with one member: printed inline
-has "5.5.5.0/24 nhid 10005 dev vpn1 proto 233" ip route show table 10000
-has "id 10005 group 10011,2 $RES" nh
-hasnt "id 10001 group 10007 $RES" nh
-hasnt "id 10007 dev vpn0 scope host proto 233" nh
+has "5.5.5.0/24 nhid 10011 dev vpn1 proto 233" ip route show table 10000
+has "id 10011 group 10009,2 $RES" nh
+hasnt "id 10003 group 10001 $RES" nh
+hasnt "id 10001 dev vpn0 scope host proto 233" nh
 
 echo "== iface up -> restored"
 mark; ip link set vpn0 up
 wait_log "sync (link event): 7 routes set, 0 deleted, 6 nexthops set, 0 deleted, 0 rules added, 0 deleted"
-has "1.0.0.0/24 nhid 10001 dev vpn0 proto 233" ip route show table 10000
-has "default nhid 10001 dev vpn0 proto 233" ip route show table 10002
-has "id 10005 group 10007/10011,2 $RES" nh
+has "1.0.0.0/24 nhid 10003 dev vpn0 proto 233" ip route show table 10000
+has "default nhid 10003 dev vpn0 proto 233" ip route show table 10002
+has "id 10011 group 10001/10009,2 $RES" nh
 
 echo "== gateway change -> member replaced in place"
 mark; ip route replace default via 192.0.2.3 dev wan0
 wait_log "sync (link event): 0 routes set, 0 deleted, 1 nexthops set, 0 deleted, 0 rules added, 0 deleted"
-has "id 10009 via 192.0.2.3 dev wan0 scope link proto 233" nh
-has "9.9.9.0/24 nhid 10003 via 192.0.2.3 dev wan0 proto 233" ip route show table 10000
-has "default nhid 10003 via 192.0.2.3 dev wan0 proto 233" ip route show table 10003
+has "id 10005 via 192.0.2.3 dev wan0 scope link proto 233" nh
+has "9.9.9.0/24 nhid 10007 via 192.0.2.3 dev wan0 proto 233" ip route show table 10000
+has "default nhid 10007 via 192.0.2.3 dev wan0 proto 233" ip route show table 10003
 
 echo "== gateway gone on L2 iface -> blackhole v4 only"
 mark; ip route del default dev wan0
 wait_log "sync (link event): 2 routes set, 0 deleted, 0 nexthops set, 2 deleted, 0 rules added, 0 deleted"
 has "blackhole 9.9.9.0/24 proto 233" ip route show table 10000
 has "blackhole default proto 233" ip route show table 10003
-has "default nhid 10004 proto 233 metric 1024 pref medium" ip -6 route show table 10003
+has "default nhid 10008 proto 233 metric 1024 pref medium" ip -6 route show table 10003
 mark; ip route add default via 192.0.2.1 dev wan0
 wait_log "sync (link event): 2 routes set, 0 deleted, 2 nexthops set, 0 deleted, 0 rules added, 0 deleted"
-has "9.9.9.0/24 nhid 10003 via 192.0.2.1 dev wan0 proto 233" ip route show table 10000
+has "9.9.9.0/24 nhid 10007 via 192.0.2.1 dev wan0 proto 233" ip route show table 10000
 
 echo "== back-to-back flap -> full re-set"
 frozen sh -c 'ip link set vpn1 down; ip link set vpn1 up'
 wait_log "link flap on vpn1, re-syncing"
 wait_log "sync (link flap)"
-has "id 10005 group 10007/10011,2 $RES" nh
-has "id 10006 group 10008/10012,2 $RES" nh
-has "id 10011 dev vpn1 scope host proto 233" nh
+has "id 10011 group 10001/10009,2 $RES" nh
+has "id 10012 group 10002/10010,2 $RES" nh
+has "id 10009 dev vpn1 scope host proto 233" nh
 
 echo "== all pool members down -> blackhole"
 frozen sh -c 'ip link set vpn0 down; ip link set vpn1 down'
 wait_log "pool: v4 blackholed"
 has "blackhole 5.5.5.0/24 proto 233" ip route show table 10000
 has "blackhole default proto 233" ip route show table 10004
-if nh | grep -q "^id 1000[56] "; then fail "pool group left"; else pass "pool group gone"; fi
+if nh | grep -q "^id 1001[12] "; then fail "pool group left"; else pass "pool group gone"; fi
 frozen sh -c 'ip link set vpn0 up; ip link set vpn1 up'
 wait_log "pool: v4 via vpn0, vpn1"
-has "5.5.5.0/24 nhid 10005 proto 233" ip route show table 10000
-has "id 10005 group 10007/10011,2 $RES" nh
+has "5.5.5.0/24 nhid 10011 proto 233" ip route show table 10000
+has "id 10011 group 10001/10009,2 $RES" nh
 
 echo "== reload: probed group"
 GRPS="vpn0 wan0 pool probed"; write_config
-hup; wait_log "sync (reload)"
+hup; wait_log "sync (reload): 4 routes set, 0 deleted, 2 nexthops set, 0 deleted, 2 rules added, 0 deleted"
 wait_log "wan0: rp_filter is 2, probe replies may be dropped"
 has "10001:	from all fwmark 0xfe000000/0xff000000 lookup 10001 proto 233" ip rule
 has "10001:	from all fwmark 0xfe000000/0xff000000 lookup 10001 proto 233" ip -6 rule
@@ -245,24 +246,24 @@ has "default via 192.0.2.1 dev wan0 proto 233 metric 2" ip route show table 1000
 has "default dev vpn1 proto 233 scope link metric 3" ip route show table 10001
 has "default via 2001:db8::1 dev wan0 proto 233 metric 2 pref medium" ip -6 route show table 10001
 hasnt "default dev vpn0 proto 233 scope link metric 1" ip route show table 10001
-# one more group shifts member ids by 2, group ids stay
-has "id 10005 group 10009/10013,2 $RES" nh
-has "id 10007 group 10011/10013 $RES" nh
-has "id 10011 via 192.0.2.1 dev wan0 scope link proto 233" nh
-has "1.0.0.0/24 nhid 10001 dev vpn0 proto 233" ip route show table 10000
+# one more group renumbers nothing else
+has "id 10011 group 10001/10009,2 $RES" nh
+has "id 10015 group 10005/10009 $RES" nh
+has "id 10005 via 192.0.2.1 dev wan0 scope link proto 233" nh
+has "1.0.0.0/24 nhid 10003 dev vpn0 proto 233" ip route show table 10000
 GRPS="vpn0 wan0 pool"; write_config
-hup; wait_log "sync (reload)"
+hup; wait_log "sync (reload): 0 routes set, 4 deleted, 0 nexthops set, 2 deleted, 0 rules added, 2 deleted"
 hasnt "10001:	from all fwmark 0xfe000000/0xff000000 lookup 10001 proto 233" ip rule
 empty ip route show table 10001
 empty ip -6 route show table 10001
-has "id 10005 group 10007/10011,2 $RES" nh
+has "id 10011 group 10001/10009,2 $RES" nh
 if [ "$(nh | grep -c 'proto 233')" = 12 ]; then pass "12 nexthops"; else fail "nexthop count"; nh; fi
 
 echo "== reload: list diff"
 printf '1.1.1.0/24\n4.4.4.0/24\n' > "$T/lists/b.lst"
 hup; wait_log "1 routes set, 1 deleted, 0 nexthops set, 0 deleted, 0 rules added, 0 deleted"
-has "4.4.4.0/24 nhid 10001 dev vpn0 proto 233" ip route show table 10000
-hasnt "8.8.8.0/24 nhid 10001 dev vpn0 proto 233" ip route show table 10000
+has "4.4.4.0/24 nhid 10003 dev vpn0 proto 233" ip route show table 10000
+hasnt "8.8.8.0/24 nhid 10003 dev vpn0 proto 233" ip route show table 10000
 
 echo "== reload: no-op"
 hup; wait_log "sync (reload): nothing to do"
@@ -271,7 +272,7 @@ echo "== reload: broken config keeps old state"
 cp "$T/config" "$T/config.good"
 printf "config rule 'bad'\n\toption group 'nope'\n" >> "$T/config"
 hup; wait_log "reload failed, keeping the old config"
-has "4.4.4.0/24 nhid 10001 dev vpn0 proto 233" ip route show table 10000
+has "4.4.4.0/24 nhid 10003 dev vpn0 proto 233" ip route show table 10000
 mv "$T/config.good" "$T/config"
 
 echo "== reload: swap group order"
@@ -281,38 +282,38 @@ hup; wait_log "sync (reload)"
 has "10002:	from all fwmark 0xaa000000/0xff000000 lookup 10002 proto 233" ip rule
 has "10003:	from all fwmark 0x12000000/0xff000000 lookup 10003 proto 233" ip rule
 hasnt "10002:	from all fwmark 0x12000000/0xff000000 lookup 10002 proto 233" ip rule
-has "default nhid 10001 via 192.0.2.1 dev wan0 proto 233" ip route show table 10002
-has "default nhid 10003 dev vpn0 proto 233" ip route show table 10003
+has "default nhid 10003 via 192.0.2.1 dev wan0 proto 233" ip route show table 10002
+has "default nhid 10007 dev vpn0 proto 233" ip route show table 10003
 # 1.0.0.0/24: first rule in config order still 'warp' -> vpn0
-has "1.0.0.0/24 nhid 10003 dev vpn0 proto 233" ip route show table 10000
-has "9.9.9.0/24 nhid 10001 via 192.0.2.1 dev wan0 proto 233" ip route show table 10000
-has "id 10001 group 10007 $RES" nh
-has "id 10007 via 192.0.2.1 dev wan0 scope link proto 233" nh
-has "id 10005 group 10009/10011,2 $RES" nh
+has "1.0.0.0/24 nhid 10007 dev vpn0 proto 233" ip route show table 10000
+has "9.9.9.0/24 nhid 10003 via 192.0.2.1 dev wan0 proto 233" ip route show table 10000
+has "id 10003 group 10001 $RES" nh
+has "id 10001 via 192.0.2.1 dev wan0 scope link proto 233" nh
+has "id 10011 group 10005/10009,2 $RES" nh
 
 echo "== link deleted and recreated (new ifindex)"
 mark; ip link del vpn0; wait_log "sync (link event)"
 has "blackhole 1.0.0.0/24 proto 233" ip route show table 10000
-has "id 10005 group 10011,2 $RES" nh
+has "id 10011 group 10009,2 $RES" nh
 mark; ip link add vpn0 type dummy; ip link set vpn0 arp off up; wait_log "vpn0: v4 via vpn0"
-has "1.0.0.0/24 nhid 10003 dev vpn0 proto 233" ip route show table 10000
-has "id 10005 group 10009/10011,2 $RES" nh
+has "1.0.0.0/24 nhid 10007 dev vpn0 proto 233" ip route show table 10000
+has "id 10011 group 10005/10009,2 $RES" nh
 
 echo "== reload: global params change"
-# an odd nexthop_id shift: old members become groups, v4 ids become v6
+# an odd nexthop_id shift: groups and members trade ids, v4 ids become v6
 TABLE_ID=30000 RULE_PRIO=20000 NHID=10003; write_config
 hup; wait_log "sync (reload)"
 empty ip route show table 10000
 empty ip route show table 10002
-has "1.0.0.0/24 nhid 10006 dev vpn0 proto 233" ip route show table 30000
-has "5.5.5.0/24 nhid 10008 proto 233" ip route show table 30000
-has "2606:4700::/32 nhid 10007 proto 233 metric 1024 pref medium" ip -6 route show table 30000
-has "default nhid 10004 via 192.0.2.1 dev wan0 proto 233" ip route show table 30002
+has "1.0.0.0/24 nhid 10010 dev vpn0 proto 233" ip route show table 30000
+has "5.5.5.0/24 nhid 10014 proto 233" ip route show table 30000
+has "2606:4700::/32 nhid 10011 proto 233 metric 1024 pref medium" ip -6 route show table 30000
+has "default nhid 10006 via 192.0.2.1 dev wan0 proto 233" ip route show table 30002
 has "20000:	from all fwmark 0/0xff000000 lookup 30000 proto 233" ip rule
 has "20002:	from all fwmark 0xaa000000/0xff000000 lookup 30002 proto 233" ip rule
 hasnt "10000:	from all fwmark 0/0xff000000 lookup 10000 proto 233" ip rule
-has "id 10008 group 10012/10014,2 $RES" nh
-has "id 10010 via 192.0.2.1 dev wan0 scope link proto 233" nh
+has "id 10014 group 10008/10012,2 $RES" nh
+has "id 10004 via 192.0.2.1 dev wan0 scope link proto 233" nh
 if [ "$(nh | grep -c 'proto 233')" = 12 ]; then pass "12 nexthops"; else fail "nexthop count"; nh; fi
 if nh | grep -q "^id 1000[123] "; then fail "old nexthops left"; else pass "old nexthops gone"; fi
 
@@ -327,14 +328,14 @@ echo "== crash leftovers are flushed on start"
 start
 kill -KILL "$PID"; wait "$PID" 2>/dev/null || true; PID=
 has "20000:	from all fwmark 0/0xff000000 lookup 30000 proto 233" ip rule
-has "id 10008 group 10012/10014,2 $RES" nh
+has "id 10014 group 10008/10012,2 $RES" nh
 TABLE_ID=10000 RULE_PRIO=10000 NHID=10000; write_config
 start
 grep -q "flush: removed 8 rules, 13 routes, 12 nexthops with proto 233" "$LOG" &&
 	pass "stale state flushed" || fail "no flush"
 empty ip route show table 30000
-has "1.0.0.0/24 nhid 10003 dev vpn0 proto 233" ip route show table 10000
-has "id 10005 group 10009/10011,2 $RES" nh
+has "1.0.0.0/24 nhid 10007 dev vpn0 proto 233" ip route show table 10000
+has "id 10011 group 10005/10009,2 $RES" nh
 if [ "$(ip rule | grep -c 'proto 233')" = 4 ]; then pass "4 v4 rules"; else fail "rule count"; ip rule; fi
 if [ "$(nh | grep -c 'proto 233')" = 12 ]; then pass "12 nexthops"; else fail "nexthop count"; nh; fi
 stop
@@ -380,8 +381,8 @@ config rule 'tunneled'
 	list cidrset '$T/tun/*'
 EOF
 start
-has "id 10001 group 10003/10005 $RES" nh
-has "7.7.7.0/24 nhid 10001 proto 233" ip route show table 10000
+has "id 10003 group 10001/10005 $RES" nh
+has "7.7.7.0/24 nhid 10003 proto 233" ip route show table 10000
 has "default via 10.64.0.1 dev t1 proto 233 metric 1" ip route show table 10001
 tail -n +"$((MARK + 1))" "$LOG" | grep -q "rp_filter is" && fail "rp_filter warned" || pass "rp_filter 0 not warned"
 has "default via 10.64.0.1 dev t2 proto 233 metric 2" ip route show table 10001
@@ -389,14 +390,14 @@ has "default via 10.64.0.1 dev t2 proto 233 metric 2" ip route show table 10001
 mark; far $2 ip addr del 10.64.0.1/24 dev f2
 wait_log "tun: member t2 probe down"
 wait_log "sync (probe): 0 routes set, 0 deleted, 1 nexthops set, 0 deleted, 0 rules added, 0 deleted"
-has "id 10001 group 10003 $RES" nh
-has "7.7.7.0/24 nhid 10001 via 10.64.0.1 dev t1 proto 233" ip route show table 10000
+has "id 10003 group 10001 $RES" nh
+has "7.7.7.0/24 nhid 10003 via 10.64.0.1 dev t1 proto 233" ip route show table 10000
 has "default via 10.64.0.1 dev t2 proto 233 metric 2" ip route show table 10001
 
 mark; far $2 ip addr add 10.64.0.1/24 dev f2
 wait_log "tun: member t2 probe up"
 wait_log "tun: v4 via t1, t2"
-has "id 10001 group 10003/10005 $RES" nh
+has "id 10003 group 10001/10005 $RES" nh
 
 echo "== probes: all dead -> blackhole, probes still get out"
 mark; far $1 ip addr del 10.64.0.1/24 dev f1; far $2 ip addr del 10.64.0.1/24 dev f2
@@ -405,7 +406,7 @@ has "blackhole 7.7.7.0/24 proto 233" ip route show table 10000
 has "blackhole 10.64.0.0/10 proto 233" ip route show table 10000
 mark; far $1 ip addr add 10.64.0.1/24 dev f1; far $2 ip addr add 10.64.0.1/24 dev f2
 wait_log "tun: v4 via t1, t2"
-has "7.7.7.0/24 nhid 10001 proto 233" ip route show table 10000
+has "7.7.7.0/24 nhid 10003 proto 233" ip route show table 10000
 stop
 kill $FAR 2>/dev/null
 

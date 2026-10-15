@@ -24,19 +24,19 @@ $ ip rule
 10004:  from all fwmark 0x20000000/0xff000000 lookup 10004 proto 233
 
 $ ip route show table 10004
-default nhid 10005 proto 233
+default nhid 10011 proto 233
 	nexthop dev vpn_mullvad_se1 weight 1
 	nexthop dev vpn_mullvad_se2 weight 2
 	nexthop dev vpn_mullvad_se3 weight 1
 
 $ ip route show table 10000
-1.0.0.0/24 nhid 10001 dev vpn_warp_dme proto 233
-1.1.1.0/24 nhid 10001 dev vpn_warp_dme proto 233
+1.0.0.0/24 nhid 10003 dev vpn_warp_dme proto 233
+1.1.1.0/24 nhid 10003 dev vpn_warp_dme proto 233
 ...
 
 $ ip nexthop show proto 233
-id 10005 group 10011/10013,2/10015 type resilient buckets 512 idle_timer 120 unbalanced_timer 600 ...
-id 10011 dev vpn_mullvad_se1 scope host proto 233
+id 10011 group 10009/10013,2/10017 type resilient buckets 512 idle_timer 120 unbalanced_timer 600 ...
+id 10009 dev vpn_mullvad_se1 scope host proto 233
 ...
 ```
 
@@ -55,10 +55,13 @@ distinct fwmark, so their order doesn't matter.
   route through the group.
 - **Probe traffic** only comes from routebot itself (see Probes).
 
-Groups are nexthop objects: `nexthop_id + 1 + 2g + f` for group g (0-based)
-and family f (0 = v4, 1 = v6), followed by one nexthop per member device and
-family. Routes point at the group, so a member leaving or joining is a single
-group replace with no route rewritten.
+Groups are nexthop objects over one nexthop per member device and family.
+Ids come in blocks of four: device d gets `nexthop_id + 1 + 4d + f` and group
+g gets `nexthop_id + 3 + 4g + f`, with d and g 0-based in order of first
+appearance and f the family (0 = v4, 1 = v6). Each id depends only on its own
+position, so adding or removing a group at the end doesn't renumber the rest.
+Routes point at the group, so a member leaving or joining is a single group
+replace with no route rewritten.
 
 Everything is applied for both IPv4 and IPv6. Every rule, route and nexthop is
 tagged with `rt_proto`, so routebot can clean up after itself. On exit it

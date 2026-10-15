@@ -76,21 +76,28 @@ static inline uint32_t cfg_group_prio(const struct config *c, size_t g)
 	return c->rule_prio + 2 + g;
 }
 
-/* Nexthop ids: groups first so their ids don't depend on the device count. f = fam_idx. */
-static inline uint32_t cfg_group_nhid(const struct config *c, size_t g, int f)
-{
-	return c->nexthop_id + 1 + 2 * g + f;
-}
-
+/*
+ * Nexthop ids interleave devices and groups in blocks of four: device d at
+ * 4d + f, group g at 4g + 2 + f. Each id depends on its own index alone, so
+ * a group count change doesn't renumber every device. f = fam_idx.
+ */
 static inline uint32_t cfg_member_nhid(const struct config *c, size_t d, int f)
 {
-	return c->nexthop_id + 1 + 2 * c->n_groups + 2 * d + f;
+	return c->nexthop_id + 1 + 4 * d + f;
+}
+
+static inline uint32_t cfg_group_nhid(const struct config *c, size_t g, int f)
+{
+	return c->nexthop_id + 3 + 4 * g + f;
 }
 
 /* Highest nexthop id in use, for range checks. */
 static inline uint64_t cfg_nhid_end(const struct config *c)
 {
-	return (uint64_t)c->nexthop_id + 2 * (c->n_groups + c->n_devices);
+	uint64_t d = c->n_devices ? 4 * (uint64_t)c->n_devices - 2 : 0;
+	uint64_t g = 4 * (uint64_t)c->n_groups;
+
+	return (uint64_t)c->nexthop_id + (d > g ? d : g);
 }
 
 struct config *config_load(const char *path);
