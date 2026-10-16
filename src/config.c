@@ -448,10 +448,6 @@ static void load_list_file(const char *path, uint16_t rule, struct prefix_build 
 		}
 	}
 	close(fd);
-
-	for (int f = 0; f < 2; f++)
-		if (prefix_build_end_run(&pb[f]))
-			err("out of memory");	/* still correct, sorting gets slower */
 }
 
 static int load_cidrset(const char *rule_name, const char *pattern, uint16_t rule,

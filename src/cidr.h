@@ -44,27 +44,15 @@ int cidr_parse(const char *s, size_t len, uint8_t addr[16], uint8_t *plen, bool 
 
 const char *prefix_fmt(int family, const uint8_t *addr, uint8_t plen, char *buf);
 
-/*
- * Collects one family's prefixes in rule order, one run per list file,
- * then sorts them into a struct prefix4/6 array.
- */
+/* Collects one family's prefixes, then sorts them into a struct prefix4/6 array. */
 struct prefix_build {
 	uint8_t *p;		/* elements of esz bytes */
 	size_t n, cap;
 	uint8_t esz, alen;
-	size_t *runs;		/* start of each run but the first */
-	size_t n_runs, cap_runs;
-	size_t run;		/* start of the open run */
-	bool sorted;		/* the open run is in order */
-	uint8_t *side;		/* entries set aside while sorting a run */
-	size_t side_cap;
-	bool lost_run;		/* out of memory for runs: sort everything */
 };
 
 void prefix_build_init(struct prefix_build *b, int family);
 int prefix_build_add(struct prefix_build *b, const uint8_t *addr, uint8_t plen, uint16_t rule);
-/* Closes the open run (one list file). */
-int prefix_build_end_run(struct prefix_build *b);
 
 /* What prefix_build_finish reports a conflict with. */
 struct conflict_log {

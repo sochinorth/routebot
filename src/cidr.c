@@ -173,7 +173,6 @@ void prefix_build_init(struct prefix_build *b, int family)
 	memset(b, 0, sizeof(*b));
 	b->alen = family_alen(family);
 	b->esz = ESZ(b->alen);
-	b->sorted = true;
 }
 
 int prefix_build_add(struct prefix_build *b, const uint8_t *addr, uint8_t plen, uint16_t rule)
@@ -190,280 +189,22 @@ int prefix_build_add(struct prefix_build *b, const uint8_t *addr, uint8_t plen, 
 		b->p = np;
 		b->cap = cap;
 	}
-	e = at(b, b->n);
+	e = at(b, b->n++);
 	memcpy(e, addr, b->alen);
 	e[b->alen] = plen;
 	e[b->alen + 1] = 0;
 	memcpy(e + b->alen + 2, &rule, sizeof(rule));
-	if (b->sorted && b->n > b->run && key_cmp(b->alen, e - b->esz, e) > 0)
-		b->sorted = false;
-	b->n++;
 	return 0;
 }
 
-/* In place, no allocation; the order is total, so stability doesn't matter. */
-static void heapsort_(unsigned alen, uint8_t *p, size_t n)
+static int cmp4(const void *x, const void *y)
 {
-	const size_t esz = ESZ(alen);
-	uint8_t t[ESZ(16)];
-
-	for (size_t end = n, start = n / 2; end > 1;) {
-		size_t root, child;
-
-		if (start) {
-			start--;
-		} else {
-			end--;
-			copy(alen, t, p);
-			copy(alen, p, p + end * esz);
-			copy(alen, p + end * esz, t);
-		}
-		/* sift p[start] down */
-		copy(alen, t, p + start * esz);
-		for (root = start; (child = 2 * root + 1) < end; root = child) {
-			uint8_t *c = p + child * esz;
-
-			if (child + 1 < end && full_cmp(alen, c, c + esz) < 0)
-				c += esz, child++;
-			if (full_cmp(alen, t, c) >= 0)
-				break;
-			copy(alen, p + root * esz, c);
-		}
-		copy(alen, p + root * esz, t);
-	}
+	return full_cmp(4, x, y);
 }
 
-#define POP_MAX	4
-
-/* Room for need set-aside entries; no more than limit. */
-static bool side_room(struct prefix_build *b, size_t need, size_t limit)
+static int cmp6(const void *x, const void *y)
 {
-	size_t cap = b->side_cap ? b->side_cap : 128;
-	uint8_t *ns;
-
-	if (need <= b->side_cap)
-		return true;
-	if (need > limit)
-		return false;
-	while (cap < need)
-		cap *= 2;
-	if (cap > limit)
-		cap = limit;
-	ns = realloc(b->side, cap * b->esz);
-	if (!ns)
-		return false;
-	b->side = ns;
-	b->side_cap = cap;
-	return true;
-}
-
-/*
- * Sorts one run of n entries (one file, one rule: ties are identical). Lists
- * are dumps, sorted but for a few entries out of place, so: keep what is in
- * order, set the rest aside, sort that and merge it back from the end. An
- * entry below the last kept one is set aside itself, unless fewer kept ones
- * are above it than POP_MAX, or than the entries set aside in a row just
- * before it: then those kept ones were the odd ones and go aside instead.
- * A run that isn't nearly sorted gets a heapsort.
- */
-static void sort_run(struct prefix_build *b, uint8_t *p, size_t n)
-{
-	const unsigned alen = b->alen, esz = b->esz;
-	size_t w = 0, k = 0, streak = 0, r;
-
-	for (r = 0; r < n; r++) {
-		uint8_t *e = p + r * esz;
-		size_t lo = w, hi, pop;
-
-		if (w && key_cmp(alen, p + (w - 1) * esz, e) > 0) {
-			/* the kept ones above e: p[lo..w) */
-			for (lo = 0, hi = w - 1; lo < hi;) {
-				size_t mid = lo + (hi - lo) / 2;
-
-				if (key_cmp(alen, p + mid * esz, e) > 0)
-					hi = mid;
-				else
-					lo = mid + 1;
-			}
-		}
-		pop = w - lo;
-
-		if (pop > POP_MAX && pop > streak) {
-			if (!side_room(b, k + 1, n / 4))
-				break;
-			copy(alen, b->side + k++ * esz, e);
-			streak++;
-			continue;
-		}
-		if (pop) {
-			if (!side_room(b, k + pop, n / 4))
-				break;
-			memcpy(b->side + k * esz, p + lo * esz, pop * esz);
-			k += pop;
-			w = lo;
-		}
-		if (w != r)
-			copy(alen, p + w * esz, e);
-		w++;
-		streak = 0;
-	}
-
-	if (r < n) {
-		/* not nearly sorted: put the set-aside entries back, sort in place */
-		if (k)
-			memcpy(p + w * esz, b->side, k * esz);
-		heapsort_(alen, p, n);
-		return;
-	}
-
-	heapsort_(alen, b->side, k);
-	for (size_t i = w, j = k, d = n; j;) {
-		if (i && key_cmp(alen, p + (i - 1) * esz, b->side + (j - 1) * esz) > 0)
-			copy(alen, p + --d * esz, p + --i * esz);
-		else
-			copy(alen, p + --d * esz, b->side + --j * esz);
-	}
-}
-
-int prefix_build_end_run(struct prefix_build *b)
-{
-	size_t start = b->run;
-
-	if (b->n == start)
-		return 0;
-	if (!b->sorted)
-		sort_run(b, at(b, start), b->n - start);
-	b->run = b->n;
-	b->sorted = true;
-	/* in order after the previous run (the usual case): one run */
-	if (!start || key_cmp(b->alen, at(b, start - 1), at(b, start)) <= 0)
-		return 0;
-	if (b->n_runs == b->cap_runs) {
-		size_t cap = b->cap_runs ? 2 * b->cap_runs : 16;
-		size_t *nr = realloc(b->runs, cap * sizeof(*nr));
-
-		if (!nr) {
-			b->lost_run = true;
-			return -1;
-		}
-		b->runs = nr;
-		b->cap_runs = cap;
-	}
-	b->runs[b->n_runs++] = start;
-	return 0;
-}
-
-/* First index in [lo, hi) whose key is > x (upper) or >= x (!upper). */
-static size_t bound(const struct prefix_build *b, size_t lo, size_t hi, const uint8_t *x,
-                    bool upper)
-{
-	while (lo < hi) {
-		size_t mid = lo + (hi - lo) / 2;
-		int r = key_cmp(b->alen, at(b, mid), x);
-
-		if (r < 0 || (upper && r == 0))
-			lo = mid + 1;
-		else
-			hi = mid;
-	}
-	return lo;
-}
-
-/*
- * Stable merge of the sorted runs [lo, mid) and [mid, hi): what is already
- * in place is skipped, the smaller remaining side goes through tmp.
- */
-static int merge(struct prefix_build *b, size_t lo, size_t mid, size_t hi, uint8_t **tmp,
-                 size_t *tmp_cap)
-{
-	const unsigned alen = b->alen, esz = b->esz;
-	size_t na, nb;
-
-	lo = bound(b, lo, mid, at(b, mid), true);
-	if (lo == mid)
-		return 0;
-	hi = bound(b, mid, hi, at(b, mid - 1), false);
-	na = mid - lo;
-	nb = hi - mid;
-
-	if (*tmp_cap < (na < nb ? na : nb)) {
-		size_t cap = na < nb ? na : nb;
-		uint8_t *nt = realloc(*tmp, cap * esz);
-
-		if (!nt)
-			return -1;
-		*tmp = nt;
-		*tmp_cap = cap;
-	}
-
-	if (na <= nb) {
-		uint8_t *t = *tmp, *te = t + na * esz;
-		uint8_t *d = at(b, lo), *y = at(b, mid), *ye = at(b, hi);
-
-		memcpy(t, d, na * esz);
-		for (; t < te && y < ye; d += esz) {
-			if (key_cmp(alen, y, t) < 0) {
-				copy(alen, d, y);
-				y += esz;
-			} else {
-				copy(alen, d, t);
-				t += esz;
-			}
-		}
-		memcpy(d, t, te - t);
-	} else {
-		uint8_t *t = *tmp, *te = t + nb * esz;
-		uint8_t *d = at(b, hi), *x = at(b, mid), *xb = at(b, lo);
-
-		memcpy(t, x, nb * esz);
-		while (te > t && x > xb) {
-			d -= esz;
-			if (key_cmp(alen, x - esz, te - esz) > 0) {
-				x -= esz;
-				copy(alen, d, x);
-			} else {
-				te -= esz;
-				copy(alen, d, te);
-			}
-		}
-		memcpy(d - (te - t), t, te - t);
-	}
-	return 0;
-}
-
-/*
- * Runs follow each other in rule order and each is sorted, so a stable
- * merge leaves duplicates lowest rule first.
- */
-static void sort(struct prefix_build *b)
-{
-	uint8_t *tmp = NULL;
-	size_t tmp_cap = 0;
-
-	if (b->lost_run) {
-		heapsort_(b->alen, b->p, b->n);
-		return;
-	}
-	while (b->n_runs) {
-		/* bounds: 0, runs..., n; merge neighbours pairwise */
-		size_t k = 0;
-
-		for (size_t i = 0; i < b->n_runs; i += 2) {
-			size_t lo = i ? b->runs[i - 1] : 0;
-			size_t hi = i + 1 < b->n_runs ? b->runs[i + 1] : b->n;
-
-			if (merge(b, lo, b->runs[i], hi, &tmp, &tmp_cap)) {
-				/* no memory for tmp: same order, slower */
-				heapsort_(b->alen, b->p, b->n);
-				b->n_runs = 0;
-				break;
-			}
-			if (i + 1 < b->n_runs)
-				b->runs[k++] = b->runs[i + 1];
-		}
-		b->n_runs = k;
-	}
-	free(tmp);
+	return full_cmp(16, x, y);
 }
 
 size_t prefix_build_finish(struct prefix_build *b, int family, void **out,
@@ -473,7 +214,9 @@ size_t prefix_build_finish(struct prefix_build *b, int family, void **out,
 	char buf[PREFIX_STRLEN];
 	size_t w = 0;
 
-	sort(b);
+	/* the rule breaks ties: the order is total, the lowest rule comes first */
+	if (b->n > 1)
+		qsort(b->p, b->n, b->esz, alen == 4 ? cmp4 : cmp6);
 
 	for (size_t i = 0; i < b->n; i++) {
 		uint8_t *e = at(b, i);
@@ -515,7 +258,5 @@ size_t prefix_build_finish(struct prefix_build *b, int family, void **out,
 void prefix_build_free(struct prefix_build *b)
 {
 	free(b->p);
-	free(b->runs);
-	free(b->side);
 	prefix_build_init(b, b->alen == 4 ? AF_INET : AF_INET6);
 }
