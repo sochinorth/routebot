@@ -1,7 +1,7 @@
 # Bench setup shared by bench.sh and validate.sh, sourced after tests/lib.sh
 # with HERE (this directory), HOSTDEPS and PY set. Builds the mallocstat
 # shim ($SHIM), the topology, starts ubusd ($UBUSD, $UBUS), generates the
-# lists ($L) and writes $T/config. Sets V4, V6, MISC and CONFLICTS from the
+# lists ($L) and writes $T/config. Sets V4, V6 and CONFLICTS from the
 # generator's manifest.
 
 L=$T/lists
@@ -68,7 +68,6 @@ cp "$L/misc/m03.lst" "$T/m03.orig"
 mf() { $PY -c 'import json,sys; m=json.load(open(sys.argv[1])); print(eval(sys.argv[2], {}, m))' "$L/manifest.json" "$1"; }
 V4=$(mf 'routes["total"]["v4"]')
 V6=$(mf 'routes["total"]["v6"]')
-MISC=$(mf 'routes["misc"]["v4"] + routes["misc"]["v6"]')
 CONFLICTS=$(mf conflicts)
 
 cat > "$T/config" <<EOF

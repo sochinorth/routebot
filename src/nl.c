@@ -11,6 +11,7 @@
 #include <linux/nexthop.h>
 #include <linux/rtnetlink.h>
 
+#include "cidr.h"
 #include "log.h"
 #include "nl.h"
 
@@ -22,6 +23,9 @@
 #define RCVBUF_SIZE	(4 * 1024 * 1024)
 #define RECV_BUF_SIZE	(64 * 1024)
 #define MAX_LOGGED_ERRORS 16
+
+/* USER_HZ, the unit of nexthop group timers both ways */
+#define NH_HZ 100
 
 /*
  * The batch is sent when a message takes it past BATCH_LIMIT, after that
@@ -45,6 +49,9 @@ _Static_assert(MSG_MAX >= NLMSG_HDRLEN + NLMSG_ALIGN(sizeof(struct nhmsg)) +
  * error replies are single messages. Pages never written to cost nothing.
  */
 static char recv_buf[RECV_BUF_SIZE] __attribute__((aligned(4)));
+
+/* Error replies, drained while a dump's datagram in recv_buf is processed. */
+static char err_buf[8192] __attribute__((aligned(4)));
 
 static void set_rcvbuf(struct mnl_socket *s)
 {
@@ -87,8 +94,10 @@ static int attach_event_filter(struct mnl_socket *s)
 
 int nl_open(struct nl *nl)
 {
-	unsigned groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR |
-	                  RTMGRP_IPV4_ROUTE | RTMGRP_IPV6_ROUTE;
+	/* bit n-1 is group n: RTNLGRP_NEXTHOP (32) still fits the bind mask */
+	unsigned groups = RTMGRP_LINK | RTMGRP_IPV4_IFADDR | RTMGRP_IPV6_IFADDR |
+	                  RTMGRP_IPV4_ROUTE | RTMGRP_IPV6_ROUTE | RTMGRP_IPV4_RULE |
+	                  1u << (RTNLGRP_IPV6_RULE - 1) | 1u << (RTNLGRP_NEXTHOP - 1);
 	int one = 1;
 
 	memset(nl, 0, sizeof(*nl));
@@ -96,11 +105,17 @@ int nl_open(struct nl *nl)
 	nl->req = mnl_socket_open2(NETLINK_ROUTE, SOCK_CLOEXEC);
 	if (!nl->req || mnl_socket_bind(nl->req, 0, MNL_SOCKET_AUTOPID) < 0)
 		goto fail;
-	nl->portid = mnl_socket_get_portid(nl->req);
 	set_rcvbuf(nl->req);
 	/* both optional: nicer error messages, kernel-side dump filtering */
 	mnl_socket_setsockopt(nl->req, NETLINK_EXT_ACK, &one, sizeof(one));
 	mnl_socket_setsockopt(nl->req, NETLINK_GET_STRICT_CHK, &one, sizeof(one));
+
+	nl->dump = mnl_socket_open2(NETLINK_ROUTE, SOCK_CLOEXEC);
+	if (!nl->dump || mnl_socket_bind(nl->dump, 0, MNL_SOCKET_AUTOPID) < 0)
+		goto fail;
+	set_rcvbuf(nl->dump);
+	mnl_socket_setsockopt(nl->dump, NETLINK_EXT_ACK, &one, sizeof(one));
+	mnl_socket_setsockopt(nl->dump, NETLINK_GET_STRICT_CHK, &one, sizeof(one));
 
 	nl->ev = mnl_socket_open2(NETLINK_ROUTE, SOCK_NONBLOCK | SOCK_CLOEXEC);
 	if (!nl->ev)
@@ -131,8 +146,11 @@ void nl_close(struct nl *nl)
 	if (nl->batch)
 		mnl_nlmsg_batch_stop(nl->batch);
 	free(nl->batch_buf);
+	free(nl->refused);
 	if (nl->req)
 		mnl_socket_close(nl->req);
+	if (nl->dump)
+		mnl_socket_close(nl->dump);
 	if (nl->ev)
 		mnl_socket_close(nl->ev);
 	memset(nl, 0, sizeof(*nl));
@@ -147,23 +165,19 @@ int nl_dump(struct nl *nl, struct nlmsghdr *req, mnl_cb_t cb, void *data)
 	req->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
 	req->nlmsg_seq = seq;
 
-	if (mnl_socket_sendto(nl->req, req, req->nlmsg_len) < 0)
+	if (mnl_socket_sendto(nl->dump, req, req->nlmsg_len) < 0)
 		return -errno;
 
 	do {
-		n = mnl_socket_recvfrom(nl->req, recv_buf, sizeof(recv_buf));
+		n = mnl_socket_recvfrom(nl->dump, recv_buf, sizeof(recv_buf));
 		if (n < 0) {
 			if (errno == EINTR)
 				continue;
 			return -errno;
 		}
-		ret = mnl_cb_run(recv_buf, n, seq, nl->portid, cb, data);
-		if (ret < 0) {
-			/* stray error replies from earlier batches have a different seq */
-			if (errno == EPROTO || errno == ESRCH)
-				continue;
+		ret = mnl_cb_run(recv_buf, n, seq, mnl_socket_get_portid(nl->dump), cb, data);
+		if (ret < 0)
 			return -errno;
-		}
 	} while (ret != MNL_CB_STOP);
 
 	return 0;
@@ -174,18 +188,266 @@ int nl_dump_nexthops(struct nl *nl, mnl_cb_t cb, void *data)
 	char buf[128] __attribute__((aligned(4)));
 	struct nlmsghdr *nlh = mnl_nlmsg_put_header(buf);
 	struct nhmsg *nhm;
-	int ret;
 
+	/* a kernel without nexthop objects answers -EOPNOTSUPP itself */
 	nlh->nlmsg_type = RTM_GETNEXTHOP;
 	/* strict checking: everything but the family must be zero */
 	nhm = mnl_nlmsg_put_extra_header(nlh, sizeof(*nhm));
 	nhm->nh_family = AF_UNSPEC;
+	return nl_dump(nl, nlh, cb, data);
+}
 
-	ret = nl_dump(nl, nlh, cb, data);
-	/* no nexthop objects in this kernel */
-	if (ret == -EINVAL)
-		ret = -EOPNOTSUPP;
-	return ret;
+int nl_dump_routes(struct nl *nl, uint8_t family, uint32_t table, uint8_t proto,
+                   mnl_cb_t cb, void *data)
+{
+	char buf[128] __attribute__((aligned(4)));
+	struct nlmsghdr *nlh = mnl_nlmsg_put_header(buf);
+	struct rtmsg *rtm;
+
+	/* with NETLINK_GET_STRICT_CHK the kernel filters by table and protocol */
+	nlh->nlmsg_type = RTM_GETROUTE;
+	rtm = mnl_nlmsg_put_extra_header(nlh, sizeof(*rtm));
+	rtm->rtm_family = family;
+	rtm->rtm_protocol = proto;
+	if (table) {
+		rtm->rtm_table = table < 256 ? table : RT_TABLE_UNSPEC;
+		mnl_attr_put_u32(nlh, RTA_TABLE, table);
+	}
+	return nl_dump(nl, nlh, cb, data);
+}
+
+int nl_dump_rules(struct nl *nl, mnl_cb_t cb, void *data)
+{
+	char buf[128] __attribute__((aligned(4)));
+	struct nlmsghdr *nlh = mnl_nlmsg_put_header(buf);
+	struct fib_rule_hdr *frh;
+
+	nlh->nlmsg_type = RTM_GETRULE;
+	frh = mnl_nlmsg_put_extra_header(nlh, sizeof(*frh));
+	frh->family = AF_UNSPEC;
+	return nl_dump(nl, nlh, cb, data);
+}
+
+/* --- parsing --- */
+
+void kroute_key(const struct kroute *k, struct route_key *out)
+{
+	memset(out, 0, sizeof(*out));
+	out->family = k->r.family;
+	out->dst_len = k->r.plen;
+	out->src_len = k->src_len;
+	out->tos = k->tos;
+	out->table = k->r.table;
+	out->metric = k->r.metric;
+	memcpy(out->dst, k->r.dst, sizeof(out->dst));
+	memcpy(out->src, k->src, sizeof(out->src));
+}
+
+#define PARSE_MAX 64
+
+/* attributes by type; any of PARSE_MAX or above sets other */
+struct ptb {
+	const struct nlattr *tb[PARSE_MAX];
+	bool other;
+};
+
+static int ptb_cb(const struct nlattr *a, void *data)
+{
+	struct ptb *t = data;
+	unsigned type = mnl_attr_get_type(a);
+
+	if (type < PARSE_MAX)
+		t->tb[type] = a;
+	else
+		t->other = true;
+	return MNL_CB_OK;
+}
+
+/* false if any attribute is malformed */
+static bool ptb_parse(const struct nlmsghdr *nlh, size_t hdrlen, struct ptb *t)
+{
+	memset(t, 0, sizeof(*t));
+	return mnl_nlmsg_get_payload_len(nlh) >= hdrlen &&
+	       mnl_attr_parse(nlh, hdrlen, ptb_cb, t) >= MNL_CB_STOP;
+}
+
+static bool ptb_u32(const struct ptb *t, unsigned type, uint32_t *v)
+{
+	if (!t->tb[type])
+		return true;
+	if (mnl_attr_get_payload_len(t->tb[type]) < 4)
+		return false;
+	*v = mnl_attr_get_u32(t->tb[type]);
+	return true;
+}
+
+/* an address of exactly alen bytes, absent is fine */
+static bool ptb_addr(const struct ptb *t, unsigned type, size_t alen, uint8_t *out, bool *has)
+{
+	if (!t->tb[type])
+		return true;
+	if (mnl_attr_get_payload_len(t->tb[type]) != alen)
+		return false;
+	memcpy(out, mnl_attr_get_payload(t->tb[type]), alen);
+	if (has)
+		*has = true;
+	return true;
+}
+
+int nl_parse_route(const struct nlmsghdr *nlh, struct kroute *out)
+{
+	const struct rtmsg *rtm = mnl_nlmsg_get_payload(nlh);
+	struct route_spec *r = &out->r;
+	struct ptb t;
+	size_t alen;
+
+	memset(out, 0, sizeof(*out));
+	if (!ptb_parse(nlh, sizeof(*rtm), &t))
+		return -1;
+	if ((rtm->rtm_family != AF_INET && rtm->rtm_family != AF_INET6) ||
+	    (rtm->rtm_flags & RTM_F_CLONED))
+		return -1;
+	alen = family_alen(rtm->rtm_family);
+
+	r->family = rtm->rtm_family;
+	r->plen = rtm->rtm_dst_len;
+	r->type = rtm->rtm_type;
+	r->proto = rtm->rtm_protocol;
+	r->table = rtm->rtm_table;
+	out->tos = rtm->rtm_tos;
+	out->src_len = rtm->rtm_src_len;
+	if (r->plen > alen * 8 || out->src_len > alen * 8 ||
+	    !ptb_u32(&t, RTA_TABLE, &r->table) ||
+	    !ptb_u32(&t, RTA_PRIORITY, &r->metric) ||
+	    !ptb_u32(&t, RTA_NH_ID, &r->nh_id) ||
+	    !ptb_addr(&t, RTA_DST, alen, r->dst, NULL) ||
+	    !ptb_addr(&t, RTA_SRC, alen, out->src, NULL))
+		return -1;
+
+	/* nexthop details only for plain unicast routes (nhid: compat dump) */
+	if (r->type != RTN_UNICAST || r->nh_id)
+		return 0;
+	if (t.tb[RTA_MULTIPATH]) {
+		out->multipath = true;
+		return 0;
+	}
+	if (!ptb_u32(&t, RTA_OIF, (uint32_t *)&r->oif) ||
+	    !ptb_addr(&t, RTA_GATEWAY, alen, r->gw, &r->has_gw))
+		return -1;
+	return 0;
+}
+
+/* NHA_GROUP entries: weight is 0-based, weight_high (was resvd1) on 6.12+ */
+static int parse_group(const struct nlattr *a, struct nexthop_spec *out)
+{
+	const uint8_t *p = mnl_attr_get_payload(a);
+	size_t len = mnl_attr_get_payload_len(a);
+
+	if (!len || len % 8 || len / 8 > MAX_NH_GROUP)
+		return -1;
+	for (size_t i = 0; i < len / 8; i++, p += 8) {
+		unsigned w = 1 + p[4] + (p[5] << 8);
+
+		memcpy(&out->grp[i].id, p, 4);
+		out->grp[i].weight = w <= UINT16_MAX ? w : UINT16_MAX;
+	}
+	out->n_grp = len / 8;
+	return 0;
+}
+
+/* clock_t (USER_HZ) to seconds, rounded */
+static uint32_t nh_secs(const struct nlattr *a)
+{
+	return a && mnl_attr_get_payload_len(a) >= 4 ?
+	       (mnl_attr_get_u32(a) + NH_HZ / 2) / NH_HZ : 0;
+}
+
+int nl_parse_nexthop(const struct nlmsghdr *nlh, struct nexthop_spec *out)
+{
+	const struct nhmsg *nhm = mnl_nlmsg_get_payload(nlh);
+	struct ptb t, res;
+
+	memset(out, 0, sizeof(*out));
+	if (!ptb_parse(nlh, sizeof(*nhm), &t) || !t.tb[NHA_ID] ||
+	    !ptb_u32(&t, NHA_ID, &out->id))
+		return -1;
+	out->family = nhm->nh_family;
+	out->proto = nhm->nh_protocol;
+
+	if (t.tb[NHA_GROUP]) {
+		out->family = AF_UNSPEC;
+		if (parse_group(t.tb[NHA_GROUP], out))
+			return -1;
+		if (!t.tb[NHA_GROUP_TYPE] ||
+		    mnl_attr_get_payload_len(t.tb[NHA_GROUP_TYPE]) < 2 ||
+		    mnl_attr_get_u16(t.tb[NHA_GROUP_TYPE]) != NEXTHOP_GRP_TYPE_RES)
+			return 0;
+		memset(&res, 0, sizeof(res));
+		if (!t.tb[NHA_RES_GROUP] ||
+		    mnl_attr_parse_nested(t.tb[NHA_RES_GROUP], ptb_cb, &res) < MNL_CB_STOP)
+			return -1;
+		if (res.tb[NHA_RES_GROUP_BUCKETS] &&
+		    mnl_attr_get_payload_len(res.tb[NHA_RES_GROUP_BUCKETS]) >= 2)
+			out->buckets = mnl_attr_get_u16(res.tb[NHA_RES_GROUP_BUCKETS]);
+		out->timer_idle = nh_secs(res.tb[NHA_RES_GROUP_IDLE_TIMER]);
+		out->timer_busy = nh_secs(res.tb[NHA_RES_GROUP_UNBALANCED_TIMER]);
+		return 0;
+	}
+
+	if (out->family != AF_INET && out->family != AF_INET6)
+		return -1;
+	if (t.tb[NHA_BLACKHOLE]) {
+		out->blackhole = true;
+		return 0;
+	}
+	if (!ptb_u32(&t, NHA_OIF, (uint32_t *)&out->oif) ||
+	    !ptb_addr(&t, NHA_GATEWAY, family_alen(out->family), out->gw, &out->has_gw))
+		return -1;
+	return 0;
+}
+
+int nl_parse_rule(const struct nlmsghdr *nlh, struct rule_spec *out)
+{
+	const struct fib_rule_hdr *frh = mnl_nlmsg_get_payload(nlh);
+	static const unsigned plain[] = {
+		FRA_PRIORITY, FRA_FWMARK, FRA_FWMASK, FRA_TABLE, FRA_PROTOCOL, FRA_PAD,
+	};
+	struct ptb t;
+	bool odd;
+
+	memset(out, 0, sizeof(*out));
+	if (!ptb_parse(nlh, sizeof(*frh), &t) ||
+	    (frh->family != AF_INET && frh->family != AF_INET6))
+		return -1;
+
+	out->family = frh->family;
+	out->table = frh->table;
+	if (t.tb[FRA_PROTOCOL] && mnl_attr_get_payload_len(t.tb[FRA_PROTOCOL]) >= 1)
+		out->proto = mnl_attr_get_u8(t.tb[FRA_PROTOCOL]);
+	if (!ptb_u32(&t, FRA_PRIORITY, &out->prio) ||
+	    !ptb_u32(&t, FRA_FWMARK, &out->mark) ||
+	    !ptb_u32(&t, FRA_FWMASK, &out->mask) ||
+	    !ptb_u32(&t, FRA_TABLE, &out->table))
+		return -1;
+
+	/* the kernel always reports the suppressors, -1 when unset */
+	odd = frh->action != FR_ACT_TO_TBL || frh->dst_len || frh->src_len ||
+	      frh->tos || (frh->flags & ~FIB_RULE_PERMANENT) || t.other;
+	for (unsigned i = 0; i < PARSE_MAX && !odd; i++) {
+		uint32_t v = 0;
+
+		if (!t.tb[i])
+			continue;
+		if (i == FRA_SUPPRESS_PREFIXLEN || i == FRA_SUPPRESS_IFGROUP) {
+			odd = !ptb_u32(&t, i, &v) || v != UINT32_MAX;
+			continue;
+		}
+		odd = true;
+		for (unsigned j = 0; j < sizeof(plain) / sizeof(plain[0]); j++)
+			if (plain[j] == i)
+				odd = false;
+	}
+	return odd;
 }
 
 /* --- batched writes --- */
@@ -280,6 +542,47 @@ static void describe_req(const struct nlmsghdr *req, bool capped, char *buf, siz
 	}
 }
 
+/* What req was about, for nl->refused. */
+static void note_refused(struct nl *nl, const struct nlmsghdr *req, int error)
+{
+	struct attr_tb t = {};
+	struct nl_refused *r;
+
+	if (nl->n_refused == nl->cap_refused) {
+		unsigned cap = nl->cap_refused ? 2 * nl->cap_refused : 32;
+		struct nl_refused *nr = realloc(nl->refused, cap * sizeof(*nr));
+
+		/* unknown then: an error that says nothing of what failed */
+		if (!nr)
+			return;
+		nl->refused = nr;
+		nl->cap_refused = cap;
+	}
+	r = &nl->refused[nl->n_refused++];
+
+	memset(r, 0, sizeof(*r));
+	r->type = req->nlmsg_type;
+	r->error = error;
+	if (req->nlmsg_type == RTM_NEWNEXTHOP || req->nlmsg_type == RTM_DELNEXTHOP) {
+		const struct nhmsg *nhm = mnl_nlmsg_get_payload(req);
+
+		r->family = nhm->nh_family;
+		mnl_attr_parse(req, sizeof(*nhm), attr_collect, &t);
+		if (t.tb[NHA_ID] && mnl_attr_get_payload_len(t.tb[NHA_ID]) >= 4)
+			r->id = mnl_attr_get_u32(t.tb[NHA_ID]);
+	} else if (req->nlmsg_type == RTM_NEWROUTE || req->nlmsg_type == RTM_DELROUTE) {
+		const struct rtmsg *rtm = mnl_nlmsg_get_payload(req);
+
+		r->family = rtm->rtm_family;
+		r->table = rtm->rtm_table;
+		mnl_attr_parse(req, sizeof(*rtm), attr_collect, &t);
+		if (t.tb[RTA_TABLE] && mnl_attr_get_payload_len(t.tb[RTA_TABLE]) >= 4)
+			r->table = mnl_attr_get_u32(t.tb[RTA_TABLE]);
+		if (t.tb[RTA_PRIORITY] && mnl_attr_get_payload_len(t.tb[RTA_PRIORITY]) >= 4)
+			r->metric = mnl_attr_get_u32(t.tb[RTA_PRIORITY]);
+	}
+}
+
 static void handle_error(struct nl *nl, const struct nlmsghdr *nlh)
 {
 	const struct nlmsgerr *e = mnl_nlmsg_get_payload(nlh);
@@ -295,6 +598,8 @@ static void handle_error(struct nl *nl, const struct nlmsghdr *nlh)
 		return;
 	}
 
+	if (!capped)
+		note_refused(nl, &e->msg, error);
 	if (nl->n_errors++ >= MAX_LOGGED_ERRORS)
 		return;
 
@@ -320,7 +625,7 @@ static void drain_errors(struct nl *nl)
 
 	for (;;) {
 		const struct nlmsghdr *nlh;
-		ssize_t n = recv(fd, recv_buf, sizeof(recv_buf), MSG_DONTWAIT);
+		ssize_t n = recv(fd, err_buf, sizeof(err_buf), MSG_DONTWAIT);
 		int len;
 
 		if (n < 0) {
@@ -336,7 +641,7 @@ static void drain_errors(struct nl *nl)
 		}
 
 		len = n;
-		for (nlh = (const struct nlmsghdr *)recv_buf; mnl_nlmsg_ok(nlh, len);
+		for (nlh = (const struct nlmsghdr *)err_buf; mnl_nlmsg_ok(nlh, len);
 		     nlh = mnl_nlmsg_next(nlh, &len))
 			if (nlh->nlmsg_type == NLMSG_ERROR)
 				handle_error(nl, nlh);
@@ -377,7 +682,7 @@ static void batch_next(struct nl *nl)
 
 void nl_batch_begin(struct nl *nl)
 {
-	nl->n_errors = nl->n_expected = 0;
+	nl->n_errors = nl->n_expected = nl->n_refused = 0;
 	mnl_nlmsg_batch_reset(nl->batch);
 }
 
@@ -432,13 +737,14 @@ void nl_route(struct nl *nl, enum nl_op op, const struct route_spec *r)
 	batch_next(nl);
 }
 
-void nl_route_del(struct nl *nl, const struct route_key *k, uint8_t proto)
+void nl_route_key(struct nl *nl, enum nl_op op, const struct route_key *k, uint8_t proto)
 {
 	size_t alen = k->family == AF_INET ? 4 : 16;
 	struct nlmsghdr *nlh;
 	struct rtmsg *rtm;
 
-	nlh = batch_put(nl, RTM_DELROUTE, 0);
+	nlh = batch_put(nl, op == NL_DEL ? RTM_DELROUTE : RTM_NEWROUTE,
+			op == NL_DEL ? 0 : NLM_F_CREATE | NLM_F_REPLACE);
 	rtm = mnl_nlmsg_put_extra_header(nlh, sizeof(*rtm));
 	rtm->rtm_family = k->family;
 	rtm->rtm_dst_len = k->dst_len;
@@ -446,8 +752,13 @@ void nl_route_del(struct nl *nl, const struct route_key *k, uint8_t proto)
 	rtm->rtm_tos = k->tos;
 	rtm->rtm_table = k->table < 256 ? k->table : RT_TABLE_UNSPEC;
 	rtm->rtm_protocol = proto;
-	rtm->rtm_scope = RT_SCOPE_NOWHERE;
-	rtm->rtm_type = RTN_UNSPEC;
+	if (op == NL_DEL) {
+		rtm->rtm_scope = RT_SCOPE_NOWHERE;
+		rtm->rtm_type = RTN_UNSPEC;
+	} else {
+		rtm->rtm_scope = RT_SCOPE_UNIVERSE;
+		rtm->rtm_type = RTN_BLACKHOLE;
+	}
 
 	mnl_attr_put_u32(nlh, RTA_TABLE, k->table);
 	if (k->dst_len)
@@ -481,9 +792,6 @@ void nl_rule(struct nl *nl, enum nl_op op, const struct rule_spec *r)
 	batch_next(nl);
 }
 
-/* USER_HZ, which is what the kernel takes for nexthop group timers */
-#define NH_HZ 100
-
 /* at most MAX_NH_GROUP * 8 bytes of NHA_GROUP: far below BATCH_LIMIT */
 static void put_res_group(struct nlmsghdr *nlh, const struct nexthop_spec *n)
 {
@@ -511,7 +819,8 @@ void nl_nexthop(struct nl *nl, enum nl_op op, const struct nexthop_spec *n)
 	struct nhmsg *nhm;
 
 	nlh = batch_put(nl, op == NL_DEL ? RTM_DELNEXTHOP : RTM_NEWNEXTHOP,
-			op == NL_DEL ? 0 : NLM_F_CREATE | NLM_F_REPLACE);
+			op == NL_DEL ? 0 : op == NL_REPLACE ? NLM_F_REPLACE :
+			NLM_F_CREATE | NLM_F_REPLACE);
 	nhm = mnl_nlmsg_put_extra_header(nlh, sizeof(*nhm));
 	mnl_attr_put_u32(nlh, NHA_ID, n->id);
 

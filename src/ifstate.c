@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <linux/nexthop.h>
 #include <linux/rtnetlink.h>
 
 #include "ifstate.h"
@@ -107,9 +108,6 @@ static void handle_link(struct live *l, const struct nlmsghdr *nlh)
 		if ((lk->flags ^ ifi->ifi_flags) & IFF_UP)
 			debug("link %s (%d) %s", name ? name : lk->name, lk->ifindex,
 			      ifi->ifi_flags & IFF_UP ? "up" : "down");
-		if ((lk->flags & LINK_USABLE) == LINK_USABLE &&
-		    (ifi->ifi_flags & LINK_USABLE) != LINK_USABLE)
-			lk->downs++;
 		lk->flags = ifi->ifi_flags;
 		l->dirty = true;
 	}
@@ -257,22 +255,58 @@ static void handle_route(struct live *l, const struct nlmsghdr *nlh)
 	}
 }
 
+/* proto of a nexthop or rule message, -1 if it is malformed */
+static int nh_proto(const struct nlmsghdr *nlh)
+{
+	const struct nhmsg *nhm = mnl_nlmsg_get_payload(nlh);
+
+	return mnl_nlmsg_get_payload_len(nlh) >= sizeof(*nhm) ? nhm->nh_protocol : -1;
+}
+
+static int rule_proto(const struct nlmsghdr *nlh)
+{
+	struct rule_spec r;
+
+	return nl_parse_rule(nlh, &r) < 0 ? -1 : r.proto;
+}
+
 int live_event_cb(const struct nlmsghdr *nlh, void *data)
 {
 	struct live *l = data;
+	const struct rtmsg *rtm = mnl_nlmsg_get_payload(nlh);
+	const struct ifaddrmsg *ifa = mnl_nlmsg_get_payload(nlh);
 
 	switch (nlh->nlmsg_type) {
 	case RTM_NEWLINK:
 	case RTM_DELLINK:
+		l->poked = true;
 		handle_link(l, nlh);
 		break;
 	case RTM_NEWROUTE:
 	case RTM_DELROUTE:
+		/* the event filter lets default routes through only */
+		if (mnl_nlmsg_get_payload_len(nlh) < sizeof(*rtm))
+			break;
+		if (nlh->nlmsg_type == RTM_DELROUTE && rtm->rtm_protocol == l->own_proto)
+			l->poked = true;
 		handle_route(l, nlh);
 		break;
 	case RTM_DELADDR:
 		/* v4 routes via gateways in that subnet may vanish without notice */
-		l->resync = true;
+		if (mnl_nlmsg_get_payload_len(nlh) >= sizeof(*ifa) &&
+		    ifa->ifa_family == AF_INET)
+			l->resync = true;
+		/* fall through */
+	case RTM_NEWADDR:
+		l->poked = true;
+		break;
+	case RTM_DELNEXTHOP:
+		if (nh_proto(nlh) == l->own_proto)
+			l->poked = true;
+		break;
+	case RTM_DELRULE:
+		if (rule_proto(nlh) == l->own_proto)
+			l->poked = true;
 		break;
 	}
 	return MNL_CB_OK;
@@ -281,13 +315,12 @@ int live_event_cb(const struct nlmsghdr *nlh, void *data)
 int live_dump(struct live *l, struct nl *nl)
 {
 	char buf[256] __attribute__((aligned(4)));
-	struct link *old = l->links;
-	size_t n_old = l->n_links;
 	struct nlmsghdr *nlh;
 	struct ifinfomsg *ifi;
 	struct rtmsg *rtm;
 	int ret;
 
+	free(l->links);
 	l->links = NULL;
 	l->n_links = 0;
 	l->n_defroutes = 0;
@@ -300,14 +333,6 @@ int live_dump(struct live *l, struct nl *nl)
 	ifi->ifi_family = AF_UNSPEC;
 	ret = nl_dump(nl, nlh, live_event_cb, l);
 
-	/* down counters survive re-dumps */
-	for (size_t i = 0; i < n_old; i++) {
-		struct link *lk = link_find(l, old[i].ifindex);
-
-		if (lk)
-			lk->downs = old[i].downs;
-	}
-	free(old);
 
 	if (ret) {
 		err("netlink: link dump failed: %s", strerror(-ret));
@@ -377,7 +402,6 @@ void live_resolve(const struct live *l, const struct config *cfg,
 				r->ifindex = lk->ifindex;
 			else
 				memset(r, 0, sizeof(*r));
-			r->downs = lk->downs;
 		}
 	}
 }

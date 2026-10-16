@@ -1,5 +1,5 @@
 # Shared helpers for the end-to-end scripts, sourced (not run) by
-# tests/netns.sh and tests/bench/bench.sh.
+# tests/netns.sh, flush.sh, hostile.sh, tables.sh and tests/bench/bench.sh.
 #
 # Sourcing it re-executes the calling script in a throwaway user + network
 # namespace (no root needed), then sets up:
@@ -14,6 +14,8 @@
 #               variables to the routebot process alone
 #   RB_ARGS     routebot options before "-c $T/config" (default: -v)
 #   WAIT_TRIES  wait_log polls, 0.1s apart (default 50)
+#   SOON_TRIES  soon_has/soon_hasnt polls, 0.1s apart (default 15)
+#   RB_PROTO    the rt_proto kstate looks for (default 233)
 #   on_cleanup  define this function for extra teardown at exit
 
 if [ -z "${RB_IN_NS:-}" ]; then
@@ -90,20 +92,21 @@ nh() { ip nexthop show | sed 's/ unbalanced_time [0-9]*//'; }
 # run link changes while routebot is stopped, so it reads them as one batch
 frozen() { kill -STOP "$PID"; "$@"; mark; kill -CONT "$PID"; }
 
-# everything routebot owns in the kernel, in a stable order
-kstate() {
-    ip route show table all proto 233
-    ip -6 route show table all proto 233
-    nh | grep 'proto 233' || true
-    ip rule | grep 'proto 233' || true
-    ip -6 rule | grep 'proto 233' || true
-}
-
 # the log hasn't said $1 since the last mark
 not_logged() {
     _said=$(tail -n +"$((MARK + 1))" "$LOG" | grep -F -- "$1" || true)
     if [ -n "$_said" ]; then fail "log said: $1"; echo "$_said" | sed 's/^/     | /'
     else pass "log didn't say: $1"; fi
+}
+
+# everything routebot owns in the kernel, in a stable order; RB_PROTO is
+# its rt_proto (default 233)
+kstate() {
+    ip route show table all proto "${RB_PROTO:-233}"
+    ip -6 route show table all proto "${RB_PROTO:-233}"
+    nh | grep "proto ${RB_PROTO:-233}" || true
+    ip rule | grep "proto ${RB_PROTO:-233}" || true
+    ip -6 rule | grep "proto ${RB_PROTO:-233}" || true
 }
 
 # the kernel holds what a fresh start would install: restart and compare
@@ -115,4 +118,113 @@ same_as_fresh() {
     if cmp -s "$T/state.now" "$T/state.fresh"; then pass "$1: same as a fresh start"
     else fail "$1: differs from a fresh start"
         diff -u "$T/state.now" "$T/state.fresh" | sed 's/^/     | /'; fi
+}
+
+# poll until 'CMD' has (or lacks) LINE, for up to SOON_TRIES tenths of a
+# second (default 15), then check as has/hasnt do
+soon_has() {
+	_line=$1; shift
+	for _ in $(seq "${SOON_TRIES:-15}"); do
+		out "$@" | grep -qxF -- "$_line" && break
+		sleep 0.1
+	done
+	has "$_line" "$@"
+}
+soon_hasnt() {
+	_line=$1; shift
+	for _ in $(seq "${SOON_TRIES:-15}"); do
+		out "$@" | grep -qxF -- "$_line" || break
+		sleep 0.1
+	done
+	hasnt "$_line" "$@"
+}
+
+# where 'ip route get ARGS' goes: blackhole, unreachable, main or table N
+via() {
+	_o=$(ip route get "$@" 2>&1 | head -n 1)
+	via_of
+}
+via_of() {
+	case $_o in
+	*"Invalid argument"*) echo blackhole ;;
+	RTNETLINK*) echo unreachable ;;
+	*" table "*) echo "table $(echo "$_o" | sed 's/.* table \([0-9]*\).*/\1/')" ;;
+	*) echo main ;;
+	esac
+}
+
+# the same, followed by " dev DEV" when it gets out somewhere
+via_dev() {
+	_o=$(ip route get "$@" 2>&1 | head -n 1)
+	case $_o in
+	*" dev "*) echo "$(via_of) dev $(echo "$_o" | sed 's/.* dev \([^ ]*\).*/\1/')" ;;
+	*) via_of ;;
+	esac
+}
+
+goes() {
+	_want=$1; shift
+	_got=$(via "$@")
+	if [ "$_got" = "$_want" ]; then pass "'ip route get $*' goes to $_want"
+	else fail "'ip route get $*' goes to $_got, not $_want"; fi
+}
+
+# 'ip route get ARGS' gets out of device DEV (whatever the table: for IPv6
+# the kernel may name the table of a cached route on the same nexthop)
+goes_out() {
+	_want=$1; shift
+	_got=$(via_dev "$@")
+	case $_got in
+	*" dev $_want") pass "'ip route get $*' goes out of $_want" ;;
+	*) fail "'ip route get $*' goes to $_got, not out of $_want" ;;
+	esac
+}
+
+# sample where each 'ip route get ARGS' (one per argument) goes, and out of
+# which device, until stopped; "ARGS=DEV1,DEV2" also allows only those
+# devices (a blackhole has none, and is always allowed)
+sample_start() {
+	: > "$T/samples"
+	rm -f "$T/stop"
+	printf '%s\n' "$@" > "$T/sample.specs"
+	(
+		while [ ! -e "$T/stop" ]; do
+			for _s in "$@"; do
+				_a=${_s%%=*}
+				# shellcheck disable=SC2086 # each argument is a word list
+				echo "$_a: $(via_dev $_a)"
+			done
+		done >> "$T/samples"
+	) &
+	SAMPLER=$!
+}
+
+# stop sampling: none of it may have gone to main, nor out of a device its
+# argument doesn't allow
+sample_stop() {
+	touch "$T/stop"
+	wait "$SAMPLER"
+	_n=$(wc -l < "$T/samples")
+	_main=$(grep -c ': main\( dev [^ ]*\)\?$' "$T/samples" || true)
+	if [ "$_main" = 0 ] && [ "$_n" -gt 0 ]; then
+		pass "$1: $_n samples, none via main ($(grep -c ': blackhole$' "$T/samples" || true) blackholed)"
+	else
+		fail "$1: $_main of $_n samples via main"
+		grep ': main\( dev [^ ]*\)\?$' "$T/samples" | sort | uniq -c | sed 's/^/     | /'
+	fi
+	grep '=' "$T/sample.specs" | while IFS= read -r _s; do
+		awk -v a="${_s%%=*}: " -v ok=",${_s#*=}," '
+			index($0, a) == 1 {
+				n = split(substr($0, length(a) + 1), w, " ")
+				for (i = 1; i < n; i++)
+					if (w[i] == "dev" && !index(ok, "," w[i + 1] ","))
+						print
+			}' "$T/samples"
+	done > "$T/samples.wrong"
+	if [ -s "$T/samples.wrong" ]; then
+		fail "$1: $(wc -l < "$T/samples.wrong") of $_n samples out of a device not theirs"
+		sort "$T/samples.wrong" | uniq -c | sed 's/^/     | /'
+	elif grep -q '=' "$T/sample.specs"; then
+		pass "$1: none out of another group's device"
+	fi
 }

@@ -1,6 +1,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <getopt.h>
+#include <net/if.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -19,27 +20,43 @@
 #include "sync.h"
 
 #define DEFAULT_CONFIG	"/etc/config/routebot"
-#define REPAIR_DELAY_MS	(30 * 1000)
+#define RETRY_FIRST_MS	(1 * 1000)
+#define RETRY_MS	(30 * 1000)
 
 int log_level = L_INFO;
 
-/* Everything one rendering is computed from; see struct world. */
+/*
+ * Everything one rendering is computed from; see struct world. The buffers
+ * belong to cfg: allocated when it is taken into use, refilled in place.
+ */
 struct snap {
 	struct config *cfg;
 	struct ifview *ifs;
-	const char **netdev;
+	const char **netdev;		/* point into names */
+	char (*names)[IFNAMSIZ];
 	bool *member_up;
 };
 
 static struct {
 	const char *cfg_path;
-	struct snap synced;	/* what the kernel was last brought to */
+	struct config *cfg;	/* the config in use */
+	struct snap spare;	/* cfg's next snapshot is built here */
+	struct snap extra;	/* cfg's other buffer, while applied isn't cfg's */
+	/*
+	 * The world last applied successfully, cfg NULL until then. It may be
+	 * of an older config (a reload whose sync failed), which it then owns
+	 * along with its buffer. Worlds tried since may be half-applied: prev
+	 * stays this one, so their ids count as changing owner.
+	 */
+	struct snap applied;
+	bool certain;		/* the last sync_apply() returned 0 */
 	struct live live;
 	struct nl nl;
-	struct probes *probes;		/* for synced.cfg, or the config being loaded */
+	struct probes *probes;		/* for cfg, or the config being loaded */
 	struct uloop_fd ev_fd;
 	struct uloop_fd sig_fd;
-	struct uloop_timeout repair;
+	struct uloop_timeout retry;
+	struct sync *sync;
 } rb;
 
 void log_msg(int level, const char *fmt, ...)
@@ -61,58 +78,60 @@ static struct world world_of(const struct snap *s)
 	return (struct world){ s->cfg, s->ifs, s->netdev, s->member_up };
 }
 
-/* Call before freeing s->cfg. */
-static void snap_release(struct snap *s)
+/* Frees the buffers, not s->cfg. */
+static void snap_free(struct snap *s)
 {
-	if (s->netdev)
-		for (size_t d = 0; d < s->cfg->n_devices; d++)
-			free((char *)s->netdev[d]);
 	free(s->ifs);
 	free(s->netdev);
+	free(s->names);
 	free(s->member_up);
-	s->ifs = NULL;
-	s->netdev = NULL;
-	s->member_up = NULL;
+	*s = (struct snap){ 0 };
+}
+
+static int snap_alloc(struct snap *s, struct config *cfg)
+{
+	size_t n_dev = cfg->n_devices + 1;
+
+	s->cfg = cfg;
+	s->ifs = calloc(n_dev, sizeof(*s->ifs));
+	s->netdev = calloc(n_dev, sizeof(*s->netdev));
+	s->names = calloc(n_dev, sizeof(*s->names));
+	s->member_up = calloc(cfg_member_index(cfg, cfg->n_groups, 0) + 1,
+	                      sizeof(*s->member_up));
+	if (!s->ifs || !s->netdev || !s->names || !s->member_up) {
+		err("out of memory");
+		snap_free(s);
+		return -1;
+	}
+	for (size_t d = 0; d < cfg->n_devices; d++)
+		s->netdev[d] = s->names[d];
+	return 0;
 }
 
 /*
  * Fill in what each device resolves to and which members are healthy.
  * netifd names are copied: they only live until its next change callback.
+ * Allocates nothing.
  */
-static int snap_sources(struct snap *s)
+static void snap_fill(struct snap *s)
 {
 	const struct config *cfg = s->cfg;
 	size_t m = 0;
 
 	for (size_t d = 0; d < cfg->n_devices; d++) {
 		const char *l3 = netifd_l3dev(cfg->devices[d].spec);
+		const char *name = l3 ? l3 : cfg->devices[d].spec;
 
-		s->netdev[d] = strdup(l3 ? l3 : cfg->devices[d].spec);
-		if (!s->netdev[d])
-			return -1;
+		/* too long for a netdev: can't resolve */
+		if (strlen(name) >= IFNAMSIZ)
+			name = "";
+		strcpy(s->names[d], name);
 	}
 	for (size_t g = 0; g < cfg->n_groups; g++)
 		for (size_t i = 0; i < cfg->groups[g].n_members; i++)
 			s->member_up[m++] = probe_up(rb.probes, g, i);
-	return 0;
-}
-
-static int snap_take(struct snap *s, struct config *cfg)
-{
-	size_t n_members = cfg_member_index(cfg, cfg->n_groups, 0);
-
-	s->cfg = cfg;
-	s->ifs = calloc(cfg->n_devices + 1, sizeof(*s->ifs));
-	s->netdev = calloc(cfg->n_devices + 1, sizeof(*s->netdev));
-	s->member_up = calloc(n_members + 1, sizeof(*s->member_up));
-	if (!s->ifs || !s->netdev || !s->member_up || snap_sources(s)) {
-		err("out of memory");
-		snap_release(s);
-		return -1;
-	}
 
 	live_resolve(&rb.live, cfg, s->netdev, s->ifs);
-	return 0;
 }
 
 static bool snap_eq(const struct snap *a, const struct snap *b)
@@ -127,17 +146,19 @@ static bool snap_eq(const struct snap *a, const struct snap *b)
 	               cfg_member_index(cfg, cfg->n_groups, 0) * sizeof(*a->member_up));
 }
 
-/*
- * A device usable before and after whose link went down in between: the
- * kernel flushed its nexthops and the routes on them behind our back.
- */
-static int snap_flapped(const struct snap *old, const struct snap *cur)
+static int find_group(const struct config *cfg, const char *name)
 {
-	for (size_t d = 0; d < cur->cfg->n_devices; d++)
-		for (int f = 0; f < 2; f++)
-			if (old->ifs[d].fam[f].usable && cur->ifs[d].fam[f].usable &&
-			    old->ifs[d].fam[f].downs != cur->ifs[d].fam[f].downs)
-				return d;
+	for (size_t g = 0; cfg && g < cfg->n_groups; g++)
+		if (!strcmp(cfg->groups[g].name, name))
+			return g;
+	return -1;
+}
+
+static int find_device(const struct config *cfg, const char *spec)
+{
+	for (size_t d = 0; cfg && d < cfg->n_devices; d++)
+		if (!strcmp(cfg->devices[d].spec, spec))
+			return d;
 	return -1;
 }
 
@@ -162,22 +183,6 @@ static void fmt_group(const struct snap *s, size_t g, int f, char *buf, size_t l
 	}
 	if (!n)
 		snprintf(buf, len, "%s blackholed", fam_name(f));
-}
-
-static int find_group(const struct config *cfg, const char *name)
-{
-	for (size_t g = 0; cfg && g < cfg->n_groups; g++)
-		if (!strcmp(cfg->groups[g].name, name))
-			return g;
-	return -1;
-}
-
-static int find_device(const struct config *cfg, const char *spec)
-{
-	for (size_t d = 0; cfg && d < cfg->n_devices; d++)
-		if (!strcmp(cfg->devices[d].spec, spec))
-			return d;
-	return -1;
 }
 
 static void log_changes(const struct snap *old, const struct snap *cur)
@@ -278,170 +283,214 @@ static void check_rp_filter(const struct snap *old, const struct snap *cur)
 	}
 }
 
-static void log_sync(const char *why, const struct sync_stats *st)
+static void log_sync(const char *why, const struct sync_stats *st, bool failed)
 {
 	if (st->route_set || st->route_del || st->nh_set || st->nh_del ||
-	    st->rule_add || st->rule_del || st->errors)
+	    st->rule_add || st->rule_del || st->errors || failed)
 		info("sync (%s): %u routes set, %u deleted, %u nexthops set, %u deleted, "
 		     "%u rules added, %u deleted%s", why, st->route_set, st->route_del,
 		     st->nh_set, st->nh_del, st->rule_add, st->rule_del,
-		     st->errors ? ", with errors" : "");
+		     st->errors || failed ? ", with errors" : "");
 	else
 		debug("sync (%s): nothing to do", why);
 }
 
-/* Bring the kernel to s, which is taken over. */
-static void apply(const char *why, struct snap *s)
+/* Links or gateways may have changed unseen: re-dump them. */
+static int refresh_live(void)
 {
-	struct world old = world_of(&rb.synced), new = world_of(s);
-	struct sync_stats st;
+	if (!rb.live.resync)
+		return 0;
+	info("resyncing link and gateway state");
+	if (live_dump(&rb.live, &rb.nl)) {
+		rb.live.resync = true;
+		return -1;
+	}
+	return 0;
+}
 
-	log_changes(&rb.synced, s);
-	check_rp_filter(&rb.synced, s);
-	sync_apply(&rb.nl, &old, &new, &st);
-	log_sync(why, &st);
+/* The kernel may differ from rb.applied unseen: a full sync, soon. */
+static void failed(void)
+{
+	int ms = rb.certain ? RETRY_FIRST_MS : RETRY_MS;
 
-	snap_release(&rb.synced);
-	if (rb.synced.cfg != s->cfg)
-		config_free(rb.synced.cfg);
-	rb.synced = *s;
+	rb.certain = false;
+	warn("will retry in %d seconds", ms / 1000);
+	uloop_timeout_set(&rb.retry, ms);
+}
+
+/* rb.spare was applied: it becomes rb.applied. */
+static void promote(void)
+{
+	struct snap old = rb.applied;
+
+	rb.applied = rb.spare;
+	if (old.cfg == rb.cfg) {
+		rb.spare = old;
+	} else {
+		/* an older config's, or none */
+		struct config *cfg = old.cfg;
+
+		snap_free(&old);
+		config_free(cfg);
+		rb.spare = rb.extra;
+		rb.extra = (struct snap){ 0 };
+	}
+}
+
+/*
+ * Bring the kernel to rb.spare (filled). Full if asked, or if the last
+ * sync failed; prev stays the last successful world until one succeeds.
+ */
+static void sync_to(const char *why, bool full)
+{
+	const struct snap *s = &rb.spare;
+	struct world prev = world_of(&rb.applied), want = world_of(s);
+	enum sync_mode mode = full || !rb.certain || !prev.cfg ? SYNC_FULL : SYNC_DIFF;
+	struct sync_stats st = { 0 };
+	int ret;
+
+	log_changes(&rb.applied, s);
+	check_rp_filter(&rb.applied, s);
+	ret = sync_apply(rb.sync, &rb.nl, &prev, &want, mode, &st);
+	log_sync(why, &st, ret);
+	rb.live.dirty = false;
+	rb.live.poked = false;
 
 	/* probes follow links, not health: dead members keep being probed */
 	for (size_t d = 0; d < s->cfg->n_devices; d++)
 		probes_set_link(rb.probes, d, s->netdev[d],
 				s->ifs[d].fam[0].usable || s->ifs[d].fam[1].usable);
 
-	if (st.errors) {
-		warn("will retry in %d seconds", REPAIR_DELAY_MS / 1000);
-		uloop_timeout_set(&rb.repair, REPAIR_DELAY_MS);
+	if (ret) {
+		failed();
+	} else {
+		rb.certain = true;
+		promote();
+		uloop_timeout_cancel(&rb.retry);
 	}
 }
 
-/* Re-set everything; existing identical state is a no-op for the kernel. */
-static unsigned reassert(const char *why)
+/*
+ * Sync rb.cfg to the current links, netifd and probes. lazy: skip if
+ * nothing the desired state depends on changed and the kernel wasn't
+ * poked.
+ */
+static void sync_now(const char *why, bool full, bool lazy)
 {
-	struct world empty = {}, cur = world_of(&rb.synced);
-	struct sync_stats st;
-
-	sync_apply(&rb.nl, &empty, &cur, &st);
-	log_sync(why, &st);
-	return st.errors;
+	if (!rb.cfg)
+		return;		/* startup syncs once it's ready */
+	if (refresh_live()) {
+		failed();
+		return;
+	}
+	snap_fill(&rb.spare);
+	if (lazy && !full && rb.certain && rb.applied.cfg == rb.cfg &&
+	    !rb.live.dirty && !rb.live.poked && snap_eq(&rb.applied, &rb.spare)) {
+		debug("sync (%s): nothing to do", why);
+		return;
+	}
+	sync_to(why, full);
 }
 
-static void reconcile_live(const char *why)
+/*
+ * Take cfg into use with its two snapshot buffers (rb.probes already
+ * follow it). The old one goes, unless it is still the applied one.
+ */
+static void use_config(struct config *cfg, struct snap next[2])
 {
-	struct snap s;
-	int flap;
-
-	if (rb.live.resync) {
-		info("resyncing link and gateway state");
-		live_dump(&rb.live, &rb.nl);
-	}
-	if (!rb.live.dirty)
-		return;
-	rb.live.dirty = false;
-
-	if (snap_take(&s, rb.synced.cfg))
-		return;
-
-	flap = snap_flapped(&rb.synced, &s);
-	if (flap < 0 && snap_eq(&rb.synced, &s)) {
-		snap_release(&s);
-		return;
-	}
-
-	apply(why, &s);
-	if (flap >= 0) {
-		info("link flap on %s, re-syncing", rb.synced.netdev[flap]);
-		if (reassert("link flap")) {
-			warn("will retry in %d seconds", REPAIR_DELAY_MS / 1000);
-			uloop_timeout_set(&rb.repair, REPAIR_DELAY_MS);
-		}
-	}
+	snap_free(&rb.spare);
+	snap_free(&rb.extra);
+	if (rb.cfg != rb.applied.cfg)
+		config_free(rb.cfg);
+	rb.cfg = cfg;
+	rb.spare = next[0];
+	rb.extra = next[1];
 }
 
 /* A netifd mapping or a probe verdict changed. */
 static void netifd_changed(void)
 {
-	rb.live.dirty = true;
-	reconcile_live("netifd");
+	sync_now("netifd", false, true);
 }
 
 static void probes_changed(void)
 {
-	rb.live.dirty = true;
-	reconcile_live("probe");
+	sync_now("probe", false, true);
 }
 
-static void repair_cb(struct uloop_timeout *t)
+static void retry_cb(struct uloop_timeout *t)
 {
-	unsigned errors = reassert("repair");
-
-	if (errors) {
-		warn("repair: still %u errors, retrying in %d seconds",
-		     errors, REPAIR_DELAY_MS / 1000);
-		uloop_timeout_set(t, REPAIR_DELAY_MS);
-	} else {
-		info("repair: done");
-	}
-}
-
-static bool nhids_moved(const struct config *a, const struct config *b)
-{
-	return a->nexthop_id != b->nexthop_id || cfg_nhid_end(a) != cfg_nhid_end(b);
+	sync_now("retry", true, false);
 }
 
 static void reload(void)
 {
-	struct probes *old_probes;
+	struct probes *old_probes = rb.probes;
+	struct snap next[2] = { 0 };
 	struct config *cfg;
-	struct snap s;
 
 	info("reloading %s", rb.cfg_path);
 	cfg = config_load(rb.cfg_path);
-	if (!cfg || (nhids_moved(cfg, rb.synced.cfg) && sync_check_nhids(&rb.nl, cfg))) {
+	if (!cfg) {
+		err("reload failed, keeping the old config");
+		return;
+	}
+	/*
+	 * Syncs observe the protos of prev (rb.applied) and want only. Keep
+	 * the kernel to those: a failed sync may have left the current
+	 * config's proto behind, and it is about to be neither.
+	 */
+	if (rb.cfg->rt_proto != cfg->rt_proto &&
+	    (!rb.applied.cfg || rb.applied.cfg->rt_proto != rb.cfg->rt_proto))
+		sync_flush(&rb.nl, rb.cfg->rt_proto);
+	if (sync_check_nhids(&rb.nl, cfg, rb.applied.cfg)) {
 		err("reload failed, keeping the old config");
 		config_free(cfg);
 		return;
 	}
 
-	/* the old probes point into the old config, which apply() frees */
-	old_probes = rb.probes;
-	rb.probes = probes_new(cfg, probes_changed);
-	if (!rb.probes) {
+	/* the old probes point into the old config, which use_config() frees */
+	if (snap_alloc(&next[0], cfg) || snap_alloc(&next[1], cfg) ||
+	    !(rb.probes = probes_new(cfg, probes_changed))) {
 		err("out of memory");
 		rb.probes = old_probes;
+		snap_free(&next[0]);
+		snap_free(&next[1]);
 		config_free(cfg);
 		return;
 	}
+	probes_free(old_probes);
+	use_config(cfg, next);
 
 	if (cfg->gw_table != rb.live.gw_table || cfg->rt_proto != rb.live.own_proto) {
 		rb.live.gw_table = cfg->gw_table;
 		rb.live.own_proto = cfg->rt_proto;
 		rb.live.resync = true;
 	}
-	if (rb.live.resync)
-		live_dump(&rb.live, &rb.nl);
-	rb.live.dirty = false;
-
-	if (snap_take(&s, cfg)) {
-		probes_free(rb.probes);
-		rb.probes = old_probes;
-		config_free(cfg);
-		return;
-	}
-
-	probes_free(old_probes);
-	apply("reload", &s);
+	sync_now("reload", false, false);
 }
 
 static void ev_cb(struct uloop_fd *fd, unsigned events)
 {
+	bool full = false;
+
 	if (nl_event_read(&rb.nl, live_event_cb, &rb.live) == -ENOBUFS) {
 		warn("netlink: event socket overflowed");
 		rb.live.resync = true;
+		full = true;
 	}
-	reconcile_live("link event");
+	/*
+	 * After a failure the pending retry, a full sync, sees all of it: soon,
+	 * but not right away, or a sync that keeps failing could keep poking
+	 * itself with what it does succeed in.
+	 */
+	if (!rb.certain && rb.retry.pending) {
+		if (uloop_timeout_remaining64(&rb.retry) > RETRY_FIRST_MS)
+			uloop_timeout_set(&rb.retry, RETRY_FIRST_MS);
+		return;
+	}
+	if (rb.live.resync || rb.live.dirty || rb.live.poked)
+		sync_now("event", full, false);
 }
 
 static void sig_cb(struct uloop_fd *fd, unsigned events)
@@ -514,10 +563,15 @@ int main(int argc, char **argv)
 	}
 
 	uloop_init();
+	rb.sync = sync_new();
+	if (!rb.sync) {
+		err("out of memory");
+		return 1;
+	}
 
 	{
+		struct snap next[2] = { 0 };
 		struct config *cfg = config_load(rb.cfg_path);
-		struct snap s;
 
 		if (!cfg)
 			return 1;
@@ -527,30 +581,28 @@ int main(int argc, char **argv)
 		}
 		/* events queue up on the socket from here on, nothing is missed */
 		live_init(&rb.live, cfg);
-		if (sync_check_nhids(&rb.nl, cfg)) {
+		if (sync_check_nhids(&rb.nl, cfg, NULL) || live_dump(&rb.live, &rb.nl)) {
 			config_free(cfg);
 			goto out;
 		}
-		sync_flush(&rb.nl, cfg->rt_proto);
-		if (live_dump(&rb.live, &rb.nl)) {
-			config_free(cfg);
-			goto out;
-		}
-		rb.live.dirty = false;
 
 		/* the probes point into cfg: free them first on failure */
 		netifd_init(netifd_changed);
 		rb.probes = probes_new(cfg, probes_changed);
-		if (!rb.probes || snap_take(&s, cfg)) {
+		if (!rb.probes || snap_alloc(&next[0], cfg) || snap_alloc(&next[1], cfg)) {
+			snap_free(&next[0]);
 			probes_free(rb.probes);
 			rb.probes = NULL;
 			config_free(cfg);
 			goto out;
 		}
-		apply("startup", &s);
+		rb.certain = true;
+		rb.retry.cb = retry_cb;
+		use_config(cfg, next);
+		/* prev is empty: a full reconcile, in place */
+		sync_now("startup", true, false);
 	}
 
-	rb.repair.cb = repair_cb;
 	rb.ev_fd.fd = nl_event_fd(&rb.nl);
 	rb.ev_fd.cb = ev_cb;
 	rb.sig_fd.cb = sig_cb;
@@ -560,7 +612,11 @@ int main(int argc, char **argv)
 	info("running");
 	uloop_run();
 
-	ret = sync_flush(&rb.nl, rb.synced.cfg->rt_proto) ? 1 : 0;
+	/* a failed sync may have left rb.cfg's proto behind too */
+	ret = sync_flush(&rb.nl, rb.cfg->rt_proto) ? 1 : 0;
+	if (rb.applied.cfg && rb.applied.cfg->rt_proto != rb.cfg->rt_proto &&
+	    sync_flush(&rb.nl, rb.applied.cfg->rt_proto))
+		ret = 1;
 
 out:
 	probes_free(rb.probes);
@@ -568,9 +624,17 @@ out:
 	uloop_done();
 	nl_close(&rb.nl);
 	live_free(&rb.live);
-	if (rb.synced.cfg)
-		snap_release(&rb.synced);
-	config_free(rb.synced.cfg);
+	snap_free(&rb.spare);
+	snap_free(&rb.extra);
+	if (rb.cfg != rb.applied.cfg)
+		config_free(rb.cfg);
+	{
+		struct config *cfg = rb.applied.cfg;
+
+		snap_free(&rb.applied);
+		config_free(cfg);
+	}
 	close(rb.sig_fd.fd);
+	sync_free(rb.sync);
 	return ret;
 }

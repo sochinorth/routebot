@@ -38,36 +38,57 @@ printf '9.9.9.0/24\n1.0.0.0/24\n' > "$T/misc/x.lst"
 printf '5.5.5.0/24\n' > "$T/pool/p.lst"
 
 write_config() {
+	_vpn0=${VPN0:-vpn0}	# vpn0's spec, in both its groups
 	cat > "$T/config" <<EOF
 config routebot
 	option fwmask '0xff000000'
 	option table_id '${TABLE_ID:-10000}'
 	option rule_prio '${RULE_PRIO:-10000}'
 	option nexthop_id '${NHID:-10000}'
+	option gw_table '${GW_TABLE:-main}'
+	option rt_proto '${RT_PROTO:-233}'
 
 EOF
 	for g in $GRPS; do
 		case $g in
-		vpn0) printf "config group 'vpn0'\n\toption fwmark '0x12'\n\n" ;;
+		vpn0) printf "config group 'vpn0'\n\tlist device '$_vpn0'\n${VPN0_MORE:+\tlist device '$VPN0_MORE'\n}\toption fwmark '0x12'\n\n" ;;
 		wan0) printf "config group 'wan0'\n\toption fwmark '0xaa'\n\n" ;;
-		pool) printf "config group 'pool'\n\tlist device 'vpn0'\n\tlist device 'vpn1:2'\n\toption fwmark '0x30'\n${POOL_BUCKETS:+\toption buckets '$POOL_BUCKETS'\n}\n" ;;
-		probed) printf "config group 'probed'\n\tlist device 'wan0'\n\tlist device 'vpn1'\n\toption probe '192.0.2.1'\n\n" ;;
+		pool) printf "config group 'pool'\n\tlist device '$_vpn0'\n\tlist device 'vpn1:2'\n\toption fwmark '0x30'\n${POOL_BUCKETS:+\toption buckets '$POOL_BUCKETS'\n}\n" ;;
+		# a long probe_timer: no verdict comes while the group exists
+		probed) printf "config group 'probed'\n\tlist device 'wan0'\n\tlist device 'vpn1'\n\toption probe '192.0.2.1'\n\toption probe_timer '30'\n\n" ;;
+		solo) printf "config group 'solo'\n\tlist device 'vpn1'\n\toption fwmark '0x50'\n\n" ;;
 		esac >> "$T/config"
 	done
-	cat >> "$T/config" <<EOF
+	# the rules of the groups there are, always in this order
+	case " $GRPS " in *" vpn0 "*) cat >> "$T/config" <<EOF
 config rule 'warp'
 	option group 'vpn0'
 	list cidrset '$T/lists/*.lst'
 
+EOF
+	esac
+	case " $GRPS " in *" wan0 "*) cat >> "$T/config" <<EOF
 config rule 'misc'
 	option group 'wan0'
 	list cidrset '$T/misc/*'
 	list cidrset '$T/nothing/*'
 
+EOF
+	esac
+	case " $GRPS " in *" pool "*) cat >> "$T/config" <<EOF
 config rule 'pooled'
 	option group 'pool'
 	list cidrset '$T/pool/*'
+
 EOF
+	esac
+	case " $GRPS " in *" solo "*) cat >> "$T/config" <<EOF
+config rule 'alone'
+	option group 'solo'
+	list cidrset '$T/solo/*'
+
+EOF
+	esac
 }
 
 # the blackholes get nexthop ids 10000 and 10001;
@@ -75,53 +96,6 @@ EOF
 # groups vpn0, wan0, pool get 10004, 10008, 10012 (+1 for v6)
 GRPS="vpn0 wan0 pool"
 write_config
-
-# where 'ip route get ARGS' goes: blackhole, unreachable, main or table N
-via() {
-	_o=$(ip route get "$@" 2>&1 | head -n 1)
-	case $_o in
-	*"Invalid argument"*) echo blackhole ;;
-	RTNETLINK*) echo unreachable ;;
-	*" table "*) echo "table $(echo "$_o" | sed 's/.* table \([0-9]*\).*/\1/')" ;;
-	*) echo main ;;
-	esac
-}
-
-goes() {
-	_want=$1; shift
-	_got=$(via "$@")
-	if [ "$_got" = "$_want" ]; then pass "'ip route get $*' goes to $_want"
-	else fail "'ip route get $*' goes to $_got, not $_want"; fi
-}
-
-# sample where each 'ip route get ARGS' (one per argument) goes, until stopped
-sample_start() {
-	: > "$T/samples"
-	rm -f "$T/stop"
-	(
-		while [ ! -e "$T/stop" ]; do
-			for _a in "$@"; do
-				# shellcheck disable=SC2086 # each argument is a word list
-				echo "$_a: $(via $_a)"
-			done
-		done >> "$T/samples"
-	) &
-	SAMPLER=$!
-}
-
-# stop sampling: none of it may have gone to main
-sample_stop() {
-	touch "$T/stop"
-	wait "$SAMPLER"
-	_n=$(wc -l < "$T/samples")
-	_main=$(grep -c ': main$' "$T/samples" || true)
-	if [ "$_main" = 0 ] && [ "$_n" -gt 0 ]; then
-		pass "$1: $_n samples, none via main ($(grep -c ': blackhole$' "$T/samples" || true) blackholed)"
-	else
-		fail "$1: $_main of $_n samples via main"
-		grep ': main$' "$T/samples" | sort | uniq -c | sed 's/^/     | /'
-	fi
-}
 
 echo "== startup"
 start
@@ -163,6 +137,7 @@ if ip route show table 10000 | grep -q blackhole; then fail "blackholed prefixes
 grep -q "claimed by rule 'warp' (vpn0) and rule 'misc' (wan0)" "$LOG" && pass "conflict warned" || fail "no conflict warning"
 grep -q "invalid CIDR 'not-a-cidr'" "$LOG" && pass "bad line warned" || fail "no bad line warning"
 grep -q "pool: v4 via vpn0, vpn1" "$LOG" && pass "group logged" || fail "no group log"
+same_as_fresh "startup"
 
 echo "== the last member's link goes down -> the kernel takes the group, nothing leaks"
 # vpn0 is group vpn0's only member: the kernel deletes its nexthops, the
@@ -175,9 +150,13 @@ hasnt "1.0.0.0/24 nhid 10004 dev vpn0 proto 233" ip route show table 10000
 goes blackhole 7.7.7.7 mark 0x12000000
 goes blackhole 2001:db8:ffff::1 mark 0x12000000
 mark; kill -CONT "$PID"
-# group vpn0 back as the blackhole, with its 5 'warp' prefixes and 2
-# defaults; pool replaced in place; vpn0's members gone already
-wait_log "sync (link event): 7 routes set, 0 deleted, 4 nexthops set, 2 deleted, 0 rules added, 0 deleted"
+# group vpn0 back as the blackhole (2 nexthops), with its 5 'warp'
+# prefixes and 2 defaults; pool needs nothing: the kernel dropped vpn0 from
+# it already, leaving what the config wants; vpn0's member nexthops went
+# with its link, nothing left to delete
+wait_log "vpn0: kernel lost its v4 group, restoring"
+wait_log "vpn0: kernel lost its v6 group, restoring"
+wait_log "sync (event): 7 routes set, 0 deleted, 2 nexthops set, 0 deleted, 0 rules added, 0 deleted"
 wait_log "vpn0: v4 blackholed"
 wait_log "pool: v6 via vpn1"
 has "blackhole 1.0.0.0/24 nhid 10004 dev lo proto 233" ip route show table 10000
@@ -198,25 +177,25 @@ same_as_fresh "vpn0 down"
 
 echo "== iface up -> restored, no route touched"
 mark; ip link set vpn0 up
-wait_log "sync (link event): 0 routes set, 0 deleted, 6 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+wait_log "sync (event): 0 routes set, 0 deleted, 6 nexthops set, 0 deleted, 0 rules added, 0 deleted"
 has "1.0.0.0/24 nhid 10004 dev vpn0 proto 233" ip route show table 10000
 has "default nhid 10004 dev vpn0 proto 233" ip route show table 10002
 has "id 10004 group 10002 $RES" nh
 has "id 10012 group 10002/10010,2 $RES" nh
 goes "table 10000" 1.0.0.1
+same_as_fresh "vpn0 up"
 
 echo "== gateway change -> member replaced in place"
 mark; ip route replace default via 192.0.2.3 dev wan0
-wait_log "sync (link event): 0 routes set, 0 deleted, 1 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+wait_log "sync (event): 0 routes set, 0 deleted, 1 nexthops set, 0 deleted, 0 rules added, 0 deleted"
 has "id 10006 via 192.0.2.3 dev wan0 scope link proto 233" nh
 has "9.9.9.0/24 nhid 10008 via 192.0.2.3 dev wan0 proto 233" ip route show table 10000
 has "default nhid 10008 via 192.0.2.3 dev wan0 proto 233" ip route show table 10003
+same_as_fresh "gateway changed"
 
 echo "== gateway gone on L2 iface -> group blackholed in place, v4 only"
-# none of the group's members left: the kernel may have deleted it with its
-# routes (a link down would), so its prefix and default are set again
 mark; ip route del default dev wan0
-wait_log "sync (link event): 2 routes set, 0 deleted, 1 nexthops set, 1 deleted, 0 rules added, 0 deleted"
+wait_log "sync (event): 0 routes set, 0 deleted, 1 nexthops set, 1 deleted, 0 rules added, 0 deleted"
 has "blackhole 9.9.9.0/24 nhid 10008 dev lo proto 233" ip route show table 10000
 has "blackhole default nhid 10008 dev lo proto 233" ip route show table 10003
 has "id 10008 group 10000 $RES" nh
@@ -224,16 +203,221 @@ has "default nhid 10009 proto 233 metric 1024 pref medium" ip -6 route show tabl
 goes blackhole 9.9.9.9
 goes blackhole 7.7.7.7 mark 0xaa000000
 mark; ip route add default via 192.0.2.1 dev wan0
-wait_log "sync (link event): 0 routes set, 0 deleted, 2 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+wait_log "sync (event): 0 routes set, 0 deleted, 2 nexthops set, 0 deleted, 0 rules added, 0 deleted"
 has "9.9.9.0/24 nhid 10008 via 192.0.2.1 dev wan0 proto 233" ip route show table 10000
+same_as_fresh "gateway back"
 
-echo "== back-to-back flap -> full re-set"
+echo "== back-to-back flaps -> what the kernel flushed is re-created, nothing else"
+# one member of pool (NOARP): its nexthops are back in pool, no route touched
 frozen sh -c 'ip link set vpn1 down; ip link set vpn1 up'
-wait_log "link flap on vpn1, re-syncing"
-wait_log "sync (link flap)"
+# not its group, which vpn0 kept alive: replaced, not lost
+wait_log "vpn1: kernel lost its v4 nexthop, restoring"
+wait_log "vpn1: kernel lost its v6 nexthop, restoring"
+wait_log "sync (event): 0 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+not_logged "pool: kernel lost"
+not_logged "pool: v"
+not_logged "unusable"
 has "id 10012 group 10002/10010,2 $RES" nh
 has "id 10013 group 10003/10011,2 $RES" nh
 has "id 10010 dev vpn1 scope host proto 233" nh
+same_as_fresh "vpn1 flap"
+
+# sole member of group vpn0, also in pool: vpn0's groups went with it, and
+# the 5 'warp' prefixes and 2 defaults on them
+frozen sh -c 'ip link set vpn0 down; ip link set vpn0 up'
+wait_log "vpn0: kernel lost its v4 nexthop, restoring"
+wait_log "vpn0: kernel lost its v6 nexthop, restoring"
+wait_log "vpn0: kernel lost its v4 group, restoring"
+wait_log "vpn0: kernel lost its v6 group, restoring"
+wait_log "sync (event): 7 routes set, 0 deleted, 6 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+not_logged "pool: kernel lost"
+not_logged "vpn0: v"
+not_logged "pool: v"
+has "1.0.0.0/24 nhid 10004 dev vpn0 proto 233" ip route show table 10000
+has "2606:4700::/32 nhid 10005 proto 233 metric 1024 pref medium" ip -6 route show table 10000
+has "default nhid 10004 dev vpn0 proto 233" ip route show table 10002
+has "id 10012 group 10002/10010,2 $RES" nh
+same_as_fresh "vpn0 flap"
+
+# both members of pool: pool emptied, its prefix and defaults went too
+frozen sh -c 'ip link set vpn0 down; ip link set vpn1 down; ip link set vpn0 up; ip link set vpn1 up'
+wait_log "vpn0: kernel lost its v4 nexthop, restoring"
+wait_log "vpn1: kernel lost its v4 nexthop, restoring"
+wait_log "vpn0: kernel lost its v4 group, restoring"
+wait_log "pool: kernel lost its v4 group, restoring"
+wait_log "pool: kernel lost its v6 group, restoring"
+wait_log "sync (event): 10 routes set, 0 deleted, 8 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+not_logged "pool: v"
+has "5.5.5.0/24 nhid 10012 proto 233" ip route show table 10000
+has "default nhid 10013 proto 233 metric 1024 pref medium" ip -6 route show table 10004
+same_as_fresh "pool flap"
+
+# both again, but only vpn0 comes back: pool emptied, taking its routes
+# along, yet its nexthop id is the same before and after: told what the
+# links took, one diff re-creates it and re-sets its routes
+frozen sh -c 'ip link set vpn0 down; ip link set vpn1 down; ip link set vpn0 up'
+# (vpn1's member nexthops went with its link: nothing left to delete)
+wait_log "vpn0: kernel lost its v4 nexthop, restoring"
+wait_log "pool: kernel lost its v4 group, restoring"
+wait_log "sync (event): 10 routes set, 0 deleted, 6 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+not_logged "vpn1: link went down"
+not_logged "with errors"
+has "5.5.5.0/24 nhid 10012 dev vpn0 proto 233" ip route show table 10000
+has "default nhid 10013 proto 233 metric 1024 pref medium" ip -6 route show table 10004
+same_as_fresh "pool flap, vpn1 left down"
+mark; ip link set vpn1 up
+wait_log "pool: v4 via vpn0, vpn1"
+same_as_fresh "vpn1 back"
+
+# deleted and re-created in one batch: a new link, never seen going down,
+# but the kernel flushed the old link's nexthops just the same
+frozen sh -c 'ip link del vpn0; ip link add vpn0 type dummy; ip link set vpn0 arp off up'
+wait_log "vpn0: kernel lost its v4 nexthop, restoring"
+wait_log "vpn0: kernel lost its v4 group, restoring"
+wait_log "sync (event): 7 routes set, 0 deleted, 6 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+has "1.0.0.0/24 nhid 10004 dev vpn0 proto 233" ip route show table 10000
+has "id 10012 group 10002/10010,2 $RES" nh
+same_as_fresh "vpn0 re-created"
+
+# ... with the same ifindex (as a link moved to another netns and back)
+IDX=$(ip -o link show vpn0 | cut -d: -f1)
+frozen sh -c "ip link del vpn0; ip link add vpn0 index $IDX type dummy; ip link set vpn0 arp off up"
+wait_log "vpn0: kernel lost its v4 nexthop, restoring"
+wait_log "vpn0: kernel lost its v4 group, restoring"
+wait_log "sync (event): 7 routes set, 0 deleted, 6 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+has "1.0.0.0/24 nhid 10004 dev vpn0 proto 233" ip route show table 10000
+has "id 10012 group 10002/10010,2 $RES" nh
+same_as_fresh "vpn0 re-created with the same ifindex"
+
+# a gateway member, sole member of wan0; going down also takes its v6
+# address and its default routes in main
+wan0_flap() {
+    frozen sh -c "ip link set wan0 down; ip link set wan0 up
+        ip -6 addr add 2001:db8::2/64 dev wan0 nodad
+        ip route add default via $1 dev wan0
+        ip -6 route add default via 2001:db8::1 dev wan0"
+}
+wan0_flap 192.0.2.1
+wait_log "wan0: kernel lost its v4 nexthop, restoring"
+wait_log "wan0: kernel lost its v6 nexthop, restoring"
+wait_log "wan0: kernel lost its v4 group, restoring"
+wait_log "wan0: kernel lost its v6 group, restoring"
+wait_log "sync (event): 3 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+not_logged "wan0: v"
+has "9.9.9.0/24 nhid 10008 via 192.0.2.1 dev wan0 proto 233" ip route show table 10000
+has "default nhid 10009 proto 233 metric 1024 pref medium" ip -6 route show table 10003
+has "id 10007 via 2001:db8::1 dev wan0 scope link proto 233" nh
+same_as_fresh "wan0 flap"
+
+# ... that comes back with another gateway
+wan0_flap 192.0.2.3
+wait_log "wan0: kernel lost its v4 nexthop, restoring"
+wait_log "wan0: kernel lost its v4 group, restoring"
+wait_log "sync (event): 3 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+wait_log "wan0: v4 via 192.0.2.3 dev wan0"
+not_logged "wan0: v4 via wan0"
+has "id 10006 via 192.0.2.3 dev wan0 scope link proto 233" nh
+has "9.9.9.0/24 nhid 10008 via 192.0.2.3 dev wan0 proto 233" ip route show table 10000
+same_as_fresh "wan0 flap with a new gateway"
+wan0_flap 192.0.2.1
+wait_log "sync (event): 3 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+has "9.9.9.0/24 nhid 10008 via 192.0.2.1 dev wan0 proto 233" ip route show table 10000
+same_as_fresh "wan0 flap, its gateway back"
+
+echo "== a flap lost to an event socket overflow -> re-created all the same"
+# MTU changes on a bystander fill the receive buffer of a stopped routebot
+# (about 3500 of them fill its 4 MB), so vpn0's down and up are dropped:
+# only the overflow says anything
+ip link add flood0 type dummy
+for i in $(seq 4000); do
+	echo "link set flood0 mtu 1400"
+	echo "link set flood0 mtu 1500"
+done > "$T/flood"
+flood_flap() { ip -batch "$T/flood"; ip link set vpn0 down; ip link set vpn0 up; }
+frozen flood_flap
+wait_log "netlink: event socket overflowed"
+wait_log "vpn0: kernel lost its v4 group, restoring"
+has "1.0.0.0/24 nhid 10004 dev vpn0 proto 233" ip route show table 10000
+has "id 10012 group 10002/10010,2 $RES" nh
+same_as_fresh "vpn0 flap lost to an overflow"
+
+echo "== reload: a flap still unseen when the new config is applied"
+# the signal comes first and is handled first; learning gateways from
+# another table makes the reload re-dump links, which shows vpn0 re-created
+# (and up at once: no down for the link events to count afterwards)
+ip route add default via 192.0.2.1 dev wan0 table 100
+ip -6 route add default via 2001:db8::1 dev wan0 table 100
+GW_TABLE=100 write_config
+hup_recreate() {
+	kill -HUP "$PID"
+	ip link del vpn0
+	ip link add vpn0 arp off up type dummy
+}
+frozen hup_recreate
+# across a reload in one diff all the same: what went with the old link
+# is named by its nexthop ids and route keys, which the diff sets again
+wait_log "vpn0: kernel lost its v4 group, restoring"
+wait_log "sync (reload): 7 routes set, 0 deleted, 6 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+not_logged "with errors"
+has "1.0.0.0/24 nhid 10004 dev vpn0 proto 233" ip route show table 10000
+has "id 10012 group 10002/10010,2 $RES" nh
+same_as_fresh "vpn0 re-created during a reload"
+
+# ... under another name, which the new config uses (a netifd spec renamed
+# to its L3 device, re-created on reconnect): no device in the new config
+# is the one whose link was deleted; back to gw_table main for the re-dump
+hup_rename() {
+	kill -HUP "$PID"
+	ip link del "$1"
+	ip link add "$2" arp off up type dummy
+}
+VPN0=vpnx write_config
+frozen hup_rename vpn0 vpnx
+wait_log "vpn0: kernel lost its v4 group, restoring"
+wait_log "sync (reload): 7 routes set, 0 deleted, 6 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+not_logged "with errors"
+has "1.0.0.0/24 nhid 10004 dev vpnx proto 233" ip route show table 10000
+has "id 10012 group 10002/10010,2 $RES" nh
+same_as_fresh "vpn0 re-created as vpnx during a reload"
+GW_TABLE=100 write_config
+frozen hup_rename vpnx vpn0
+# the group keeps its name (and owner), the device doesn't
+wait_log "vpn0: kernel lost its v4 group, restoring"
+wait_log "sync (reload): 7 routes set, 0 deleted, 6 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+not_logged "with errors"
+has "1.0.0.0/24 nhid 10004 dev vpn0 proto 233" ip route show table 10000
+same_as_fresh "vpnx re-created as vpn0 during a reload"
+write_config
+hup; wait_log "sync (reload): nothing to do"
+ip route del default table 100
+ip -6 route del default table 100
+
+echo "== reload: a sole member flaps unseen while the new config gives its group another"
+# group vpn0 gets wan0 besides vpn0 (devices keep their order, ids stay);
+# vpn0 goes down and up after the signal, so the reload, handled first,
+# knows nothing of it. The kernel took vpn0's nexthops, group vpn0 (its
+# only member gone) and the 5 'warp' prefixes and 2 defaults on it; the
+# new config's group vpn0 could not have emptied, as it has wan0 too
+VPN0_MORE=wan0 write_config
+hup_flap() { kill -HUP "$PID"; ip link set vpn0 down; ip link set vpn0 up; }
+frozen hup_flap
+wait_log "sync (reload)"
+wait_log "sync (event)"
+not_logged "with errors"
+has "1.0.0.0/24 nhid 10004 proto 233" ip route show table 10000
+has "8.8.8.0/24 nhid 10004 proto 233" ip route show table 10000
+has "2606:4700::/32 nhid 10005 proto 233 metric 1024 pref medium" ip -6 route show table 10000
+has "default nhid 10004 proto 233" ip route show table 10002
+has "default nhid 10005 proto 233 metric 1024 pref medium" ip -6 route show table 10002
+has "id 10004 group 10002/10006 $RES" nh
+has "id 10005 group 10003/10007 $RES" nh
+has "id 10002 dev vpn0 scope host proto 233" nh
+has "id 10012 group 10002/10010,2 $RES" nh
+goes "table 10000" 1.0.0.1
+goes "table 10002" 7.7.7.7 mark 0x12000000
+same_as_fresh "vpn0 flap unseen by a reload adding a member"
+write_config
+hup; wait_log "sync (reload): 0 routes set, 0 deleted, 2 nexthops set, 0 deleted, 0 rules added, 0 deleted"
 
 echo "== all pool members' links down -> pool back as the blackhole"
 kill -STOP "$PID"
@@ -245,7 +429,10 @@ goes blackhole 5.5.5.5 mark 0x30000000
 goes blackhole 2001:db8:ffff::1 mark 0x30000000
 mark; kill -CONT "$PID"
 wait_log "pool: v4 blackholed"
-wait_log "sync (link event): 10 routes set, 0 deleted, 4 nexthops set, 4 deleted, 0 rules added, 0 deleted"
+# (the members' nexthops went with their links: nothing left to delete)
+wait_log "vpn0: kernel lost its v4 group, restoring"
+wait_log "pool: kernel lost its v4 group, restoring"
+wait_log "sync (event): 10 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted"
 has "blackhole 5.5.5.0/24 nhid 10012 dev lo proto 233" ip route show table 10000
 has "blackhole default nhid 10012 dev lo proto 233" ip route show table 10004
 has "id 10012 group 10000 $RES" nh
@@ -256,14 +443,19 @@ same_as_fresh "pool down"
 # back: the groups are replaced, no route touched
 frozen sh -c 'ip link set vpn0 up; ip link set vpn1 up'
 wait_log "pool: v4 via vpn0, vpn1"
-wait_log "sync (link event): 0 routes set, 0 deleted, 8 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+wait_log "sync (event): 0 routes set, 0 deleted, 8 nexthops set, 0 deleted, 0 rules added, 0 deleted"
 has "5.5.5.0/24 nhid 10012 proto 233" ip route show table 10000
 has "id 10012 group 10002/10010,2 $RES" nh
 goes "table 10000" 5.5.5.5
+same_as_fresh "pool back"
 
 echo "== reload: probed group"
+# an address on vpn1, for its probe route to lose below
+ip addr add 198.51.100.7/24 dev vpn1
 GRPS="vpn0 wan0 pool probed"; write_config
-hup; wait_log "sync (reload): 4 routes set, 0 deleted, 2 nexthops set, 0 deleted, 2 rules added, 0 deleted"
+# the 4 probe routes, and probed's table (no fwmark, yet it has one): its
+# default and the blackhole behind, per family
+hup; wait_log "sync (reload): 8 routes set, 0 deleted, 2 nexthops set, 0 deleted, 2 rules added, 0 deleted"
 wait_log "wan0: rp_filter is 2, probe replies may be dropped"
 has "10001:	from all fwmark 0xfe000000/0xff000000 lookup 10001 proto 233" ip rule
 has "10001:	from all fwmark 0xfe000000/0xff000000 lookup 10001 proto 233" ip -6 rule
@@ -276,22 +468,36 @@ has "id 10012 group 10002/10010,2 $RES" nh
 has "id 10016 group 10006/10010 $RES" nh
 has "id 10006 via 192.0.2.1 dev wan0 scope link proto 233" nh
 has "1.0.0.0/24 nhid 10004 dev vpn0 proto 233" ip route show table 10000
+same_as_fresh "probed group added"
+
+echo "== a probed member without a gateway loses its last v4 address -> its probe route is back"
+# vpn1 (NOARP) has its probe route by device alone: the kernel deletes
+# that silently with the device's last v4 address, and nothing else
+mark; ip addr del 198.51.100.7/24 dev vpn1
+wait_log "vpn1: kernel lost its v4 probe route, restoring"
+has "default dev vpn1 proto 233 scope link metric 3" ip route show table 10001
+has "default via 192.0.2.1 dev wan0 proto 233 metric 2" ip route show table 10001
+same_as_fresh "vpn1 lost its last v4 address"
+
 GRPS="vpn0 wan0 pool"; write_config
-hup; wait_log "sync (reload): 0 routes set, 4 deleted, 0 nexthops set, 2 deleted, 0 rules added, 2 deleted"
+hup; wait_log "sync (reload): 0 routes set, 8 deleted, 0 nexthops set, 2 deleted, 0 rules added, 2 deleted"
 hasnt "10001:	from all fwmark 0xfe000000/0xff000000 lookup 10001 proto 233" ip rule
 empty ip route show table 10001
 empty ip -6 route show table 10001
 has "id 10012 group 10002/10010,2 $RES" nh
 if [ "$(nh | grep -c 'proto 233')" = 14 ]; then pass "14 nexthops"; else fail "nexthop count"; nh; fi
+same_as_fresh "probed group removed"
 
 echo "== reload: list diff"
 printf '1.1.1.0/24\n4.4.4.0/24\n' > "$T/lists/b.lst"
 hup; wait_log "1 routes set, 1 deleted, 0 nexthops set, 0 deleted, 0 rules added, 0 deleted"
 has "4.4.4.0/24 nhid 10004 dev vpn0 proto 233" ip route show table 10000
 hasnt "8.8.8.0/24 nhid 10004 dev vpn0 proto 233" ip route show table 10000
+same_as_fresh "list diff"
 
 echo "== reload: no-op"
 hup; wait_log "sync (reload): nothing to do"
+same_as_fresh "no-op reload"
 
 echo "== reload: pool's buckets change -> re-created, its traffic dropped meanwhile, never via main"
 # the kernel can't change a group's buckets: pool is deleted, which takes
@@ -318,12 +524,53 @@ write_config
 hup; WAIT_TRIES=300 wait_log "sync (reload)"
 hup; wait_log "sync (reload): nothing to do"
 
+echo "== reload: groups reordered, a middle one removed, under load -> never out of another group's uplink"
+# three groups with an uplink each (vpn0, wan0, vpn1) and 40000 prefixes
+# each; then wan0 goes and solo moves first: every group nexthop id, group
+# table and rule priority changes hands, with 80000 prefixes to move
+mkdir -p "$T/solo"
+big() { awk -v p="$1" 'BEGIN { for (i = 0; i < 40000; i++) printf "%d.%d.%d.0/24\n", p, i / 256, i % 256 }'; }
+big 21 > "$T/lists/big.lst"
+big 22 > "$T/misc/big.lst"
+big 23 > "$T/solo/big.lst"
+printf '2001:db8:23::/48\n' > "$T/solo/v6.lst"
+GRPS="vpn0 wan0 solo"; write_config
+hup; WAIT_TRIES=300 wait_log "sync (reload)"
+goes "table 10000" 21.156.63.1
+goes "table 10000" 23.156.63.1
+goes "table 10004" 7.7.7.7 mark 0x50000000
+# the last of each list is 21/22/23.156.63.0/24
+sample_start "21.0.0.1=vpn0" "21.156.63.1=vpn0" "23.0.0.1=vpn1" "23.156.63.1=vpn1" \
+	"2606:4700::1=vpn0" "2001:db8:23::1=vpn1" \
+	"7.7.7.7 mark 0x12000000=vpn0" "7.7.7.7 mark 0x50000000=vpn1" \
+	"2001:db8:ffff::1 mark 0x12000000=vpn0" "2001:db8:ffff::1 mark 0x50000000=vpn1"
+GRPS="solo vpn0"; write_config
+hup; WAIT_TRIES=300 wait_log "sync (reload)"
+sample_stop "groups reordered, wan0 removed"
+not_logged "with errors"
+# devices vpn1, vpn0 get 10002, 10006; groups solo, vpn0 get 10004, 10008
+has "21.0.0.0/24 nhid 10008 dev vpn0 proto 233" ip route show table 10000
+has "23.156.63.0/24 nhid 10004 dev vpn1 proto 233" ip route show table 10000
+has "2001:db8:23::/48 nhid 10005 proto 233 metric 1024 pref medium" ip -6 route show table 10000
+has "10002:	from all fwmark 0x50000000/0xff000000 lookup 10002 proto 233" ip rule
+has "10003:	from all fwmark 0x12000000/0xff000000 lookup 10003 proto 233" ip rule
+has "default nhid 10004 dev vpn1 proto 233" ip route show table 10002
+has "default nhid 10008 dev vpn0 proto 233" ip route show table 10003
+empty ip route show table 10004
+if ip route show table 10000 | grep -q '^22\.'; then fail "wan0's prefixes left"; else pass "wan0's prefixes gone"; fi
+same_as_fresh "groups reordered, wan0 removed"
+rm -r "$T/solo" "$T/lists/big.lst" "$T/misc/big.lst"
+GRPS="vpn0 wan0 pool"; write_config
+hup; WAIT_TRIES=300 wait_log "sync (reload)"
+hup; wait_log "sync (reload): nothing to do"
+
 echo "== reload: broken config keeps old state"
 cp "$T/config" "$T/config.good"
 printf "config rule 'bad'\n\toption group 'nope'\n" >> "$T/config"
 hup; wait_log "reload failed, keeping the old config"
 has "4.4.4.0/24 nhid 10004 dev vpn0 proto 233" ip route show table 10000
 mv "$T/config.good" "$T/config"
+same_as_fresh "broken config refused"
 
 echo "== reload: swap group order"
 # devices now wan0, vpn0, vpn1
@@ -340,14 +587,16 @@ has "9.9.9.0/24 nhid 10004 via 192.0.2.1 dev wan0 proto 233" ip route show table
 has "id 10004 group 10002 $RES" nh
 has "id 10002 via 192.0.2.1 dev wan0 scope link proto 233" nh
 has "id 10012 group 10006/10010,2 $RES" nh
+same_as_fresh "group order swapped"
 
 echo "== link deleted and recreated (new ifindex)"
-mark; ip link del vpn0; wait_log "sync (link event)"
+mark; ip link del vpn0; wait_log "sync (event)"
 has "blackhole 1.0.0.0/24 nhid 10008 dev lo proto 233" ip route show table 10000
 has "id 10012 group 10010,2 $RES" nh
 mark; ip link add vpn0 type dummy; ip link set vpn0 arp off up; wait_log "vpn0: v4 via vpn0"
 has "1.0.0.0/24 nhid 10008 dev vpn0 proto 233" ip route show table 10000
 has "id 10012 group 10006/10010,2 $RES" nh
+same_as_fresh "vpn0 re-created"
 
 echo "== reload: global params change"
 # an odd nexthop_id shift: groups and members trade ids, v4 ids become v6
@@ -368,6 +617,47 @@ has "id 10003 blackhole proto 233" nh
 has "id 10004 blackhole proto 233" nh
 if [ "$(nh | grep -c 'proto 233')" = 14 ]; then pass "14 nexthops"; else fail "nexthop count"; nh; fi
 if nh | grep -Eq "^id 1000[012] "; then fail "old nexthops left"; else pass "old nexthops gone"; fi
+same_as_fresh "global params changed"
+
+echo "== reload: rt_proto changes and the nexthop id range moves onto the old one"
+# 10001..10014 overlaps 10003..10016, held by routebot's own nexthops with
+# the old proto: not someone else's, the reload goes ahead
+RT_PROTO=234 NHID=10001; write_config
+hup; wait_log "sync (reload)"
+not_logged "reload failed"
+not_logged "with errors"
+# devices wan0, vpn0, vpn1 get 10003, 10007, 10011; groups 10005, 10009, 10013
+has "1.0.0.0/24 nhid 10009 dev vpn0 proto 234" ip route show table 30000
+has "9.9.9.0/24 nhid 10005 via 192.0.2.1 dev wan0 proto 234" ip route show table 30000
+has "2606:4700::/32 nhid 10010 proto 234 metric 1024 pref medium" ip -6 route show table 30000
+has "default nhid 10013 proto 234" ip route show table 30004
+has "20000:	from all fwmark 0/0xff000000 lookup 30000 proto 234" ip rule
+has "20003:	from all fwmark 0x12000000/0xff000000 lookup 30003 proto 234" ip -6 rule
+has "id 10013 group 10007/10011,2 ${RES%233}234" nh
+has "id 10001 blackhole proto 234" nh
+if [ "$(nh | grep -c 'proto 234')" = 14 ]; then pass "14 nexthops"; else fail "nexthop count"; nh; fi
+# nothing with the old proto left
+empty ip route show table all proto 233
+empty ip -6 route show table all proto 233
+if nh | grep -q 'proto 233'; then fail "old proto nexthops left"; nh; else pass "no old proto nexthop left"; fi
+if ip rule | grep -q 'proto 233'; then fail "old proto v4 rules left"; else pass "no old proto v4 rule left"; fi
+if ip -6 rule | grep -q 'proto 233'; then fail "old proto v6 rules left"; else pass "no old proto v6 rule left"; fi
+RB_PROTO=234
+same_as_fresh "rt_proto 234, nexthop ids moved"
+# and back, the same way
+RT_PROTO=233 NHID=10003; write_config
+hup; wait_log "sync (reload)"
+not_logged "reload failed"
+not_logged "with errors"
+has "1.0.0.0/24 nhid 10011 dev vpn0 proto 233" ip route show table 30000
+has "id 10015 group 10009/10013,2 $RES" nh
+empty ip route show table all proto 234
+empty ip -6 route show table all proto 234
+if nh | grep -q 'proto 234'; then fail "old proto nexthops left"; nh; else pass "no old proto nexthop left"; fi
+if ip rule | grep -q 'proto 234'; then fail "old proto v4 rules left"; else pass "no old proto v4 rule left"; fi
+if ip -6 rule | grep -q 'proto 234'; then fail "old proto v6 rules left"; else pass "no old proto v6 rule left"; fi
+RB_PROTO=233
+same_as_fresh "rt_proto 233 again, nexthop ids moved back"
 
 echo "== SIGTERM cleans up"
 stop
@@ -376,21 +666,38 @@ empty ip -6 route show table all proto 233
 empty nh
 if ip rule | grep -q "proto 233"; then fail "rules left"; else pass "no rules left"; fi
 
-echo "== crash leftovers are flushed on start"
+echo "== crash leftovers are reconciled away on start"
 start
 kill -KILL "$PID"; wait "$PID" 2>/dev/null || true; PID=
 has "20000:	from all fwmark 0/0xff000000 lookup 30000 proto 233" ip rule
 has "id 10015 group 10009/10013,2 $RES" nh
 TABLE_ID=10000 RULE_PRIO=10000 NHID=10000; write_config
 start
-# the other routes: the blackholes behind the 3 group tables' defaults
-grep -q "flush: removed 8 rules, 14 nexthops and the routes on them, 6 other routes with proto 233" "$LOG" &&
-	pass "stale state flushed" || fail "no flush"
+# no flush: the startup sync takes the kernel from the leftovers to the
+# config in place. None of the 7 prefix routes is where the config wants
+# it (table 30000, not 10000); the 8 rules all have other priorities
+wait_log "reconcile: 0 prefix routes in place"
+wait_log ", 8 rules added, 8 deleted"
+# deleted: the 7 prefix routes and the 12 small routes of tables 30002..4;
+# set: the 19 of the config, and 12 old routes blackholed by key first,
+# being on nexthop ids that change owner (as observed, not derived)
+wait_log "sync (startup): 31 routes set, 19 deleted, 14 nexthops set, 14 deleted, 8 rules added, 8 deleted" # COUNT?
+not_logged "flush: removed"
+not_logged "with errors"
 empty ip route show table 30000
+empty ip -6 route show table 30000
+for _t in 30002 30003 30004; do
+	empty ip route show table $_t
+	empty ip -6 route show table $_t
+done
+hasnt "20000:	from all fwmark 0/0xff000000 lookup 30000 proto 233" ip rule
+hasnt "20000:	from all fwmark 0/0xff000000 lookup 30000 proto 233" ip -6 rule
+if nh | grep -Eq "^id 1001[456] "; then fail "old nexthops left"; else pass "old nexthops gone"; fi
 has "1.0.0.0/24 nhid 10008 dev vpn0 proto 233" ip route show table 10000
 has "id 10012 group 10006/10010,2 $RES" nh
 if [ "$(ip rule | grep -c 'proto 233')" = 4 ]; then pass "4 v4 rules"; else fail "rule count"; ip rule; fi
 if [ "$(nh | grep -c 'proto 233')" = 14 ]; then pass "14 nexthops"; else fail "nexthop count"; nh; fi
+same_as_fresh "crash leftovers reconciled"
 stop
 
 echo "== foreign nexthop in our id range"
@@ -431,19 +738,23 @@ done
 set -- $FAR
 far() { _p=$1; shift; nsenter -t "$_p" -n "$@"; }
 mkdir -p "$T/tun"; printf '7.7.7.0/24\n10.64.0.0/10\n' > "$T/tun/x.lst"
-cat > "$T/config" <<EOF
+# tun_config PROBE_TIMER PROBE_COUNT
+tun_config() {
+	cat > "$T/config" <<EOF
 config group 'tun'
 	list device 't1'
 	list device 't2'
 	option fwmark '0x40'
 	option probe '10.64.0.1'
-	option probe_timer '0.2'
-	option probe_count '3'
+	option probe_timer '$1'
+	option probe_count '$2'
 
 config rule 'tunneled'
 	option group 'tun'
 	list cidrset '$T/tun/*'
 EOF
+}
+tun_config 0.2 3
 start
 has "id 10004 group 10002/10006 $RES" nh
 has "7.7.7.0/24 nhid 10004 proto 233" ip route show table 10000
@@ -462,6 +773,17 @@ mark; far $2 ip addr add 10.64.0.1/24 dev f2
 wait_log "tun: member t2 probe up"
 wait_log "tun: v4 via t1, t2"
 has "id 10004 group 10002/10006 $RES" nh
+same_as_fresh "t2 probe back"
+
+echo "== probes: a member flaps -> its probe route is back"
+frozen sh -c 'ip link set t2 down; ip link set t2 up; ip route add default via 10.64.0.1 dev t2 metric 102'
+wait_log "t2: kernel lost its v4 nexthop, restoring"
+wait_log "t2: kernel lost its v4 probe route, restoring"
+wait_log "sync (event): 1 routes set, 0 deleted, 2 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+not_logged "tun: v"
+has "default via 10.64.0.1 dev t2 proto 233 metric 2" ip route show table 10001
+has "id 10004 group 10002/10006 $RES" nh
+same_as_fresh "t2 flap"
 
 echo "== probes: all dead -> blackholed in place, never via main; probes still get out"
 # main has defaults via t1 and t2: whatever falls through gets out there
@@ -481,10 +803,78 @@ wait_log "tun: v4 via t1, t2"
 sample_stop "tun's members come back"
 has "7.7.7.0/24 nhid 10004 proto 233" ip route show table 10000
 goes "table 10000" 7.7.7.7
-# coming back touched no prefix route: only the group was replaced
-if tail -n +"$((MARK + 1))" "$LOG" | grep -E "sync \(probe\): [1-9]"; then
-	fail "probe syncs set routes"
+# no prefix route was touched either way: only the group was replaced
+if grep -E "sync \(probe\): [1-9]" "$LOG"; then fail "probe syncs set routes"
 else pass "probe syncs set no route"; fi
+same_as_fresh "tun's members back"
+
+echo "== probes: a verdict synced before the link events -> what the flap took is back"
+# t2 is out of tun on its probes, so t1 is the kernel's only member of it.
+# t1 goes down and up while routebot is stopped, which takes t1's nexthop,
+# tun's group with the routes on it, and t1's probe route; when routebot
+# goes on, t1's probe verdict (its last probe unanswered) comes from a
+# timer, run before the link events are read: that sync knows nothing of
+# the flap. probe_count 1 makes one unanswered probe a verdict; t1's
+# outgoing echo requests are counted to stop routebot right after it sent
+# the one that goes unanswered
+tun_config 1 1
+hup; wait_log "sync (reload)"
+mark; far $2 ip addr del 10.64.0.1/24 dev f2
+wait_log "tun: member t2 probe down"
+has "id 10004 group 10002 $RES" nh
+cat > "$T/echoes.py" <<'EOF'
+import socket, sys
+# ETH_P_ALL: only those taps see outgoing packets
+s = socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(3))
+s.bind((sys.argv[1], 3))
+out = open(sys.argv[2], "a", buffering=1)
+while True:
+    p, a = s.recvfrom(2048)
+    if a[1] == 0x0800 and a[2] == socket.PACKET_OUTGOING and len(p) > 20 and p[9] == 1 and p[(p[0] & 15) * 4] == 8:
+        out.write("echo\n")
+EOF
+: > "$T/echoes"
+python3 -I "$T/echoes.py" t1 "$T/echoes" &
+ECHOES=$!
+sleep 0.5
+kill -STOP "$PID"
+far $1 ip addr del 10.64.0.1/24 dev f1
+sleep 1.2	# t1's next probe is due: sent first thing on SIGCONT
+_n=$(wc -l < "$T/echoes")
+kill -CONT "$PID"
+for _ in $(seq 300); do [ "$(wc -l < "$T/echoes")" -gt "$_n" ] && break; sleep 0.01; done
+kill -STOP "$PID"
+kill "$ECHOES"; wait "$ECHOES" 2>/dev/null || true
+if [ "$(wc -l < "$T/echoes")" -gt "$_n" ] && ! tail -n +"$((MARK + 1))" "$LOG" | grep -q "member t1 probe down"
+then pass "t1's probe sent, no verdict yet"; else fail "t1's probe never sent, or judged too soon"; fi
+ip link set t1 down
+ip link set t1 up
+ip route add default via 10.64.0.1 dev t1 metric 101
+sleep 1.2	# t1's verdict is due
+mark; kill -CONT "$PID"
+wait_log "tun: member t1 probe down"
+wait_log "tun: v4 blackholed"
+wait_log "sync (event)"
+_first=$(tail -n +"$((MARK + 1))" "$LOG" | grep -m1 'sync (' || true)
+case $_first in
+*"sync (probe)"*) pass "the probe sync came first" ;;
+*) fail "the probe sync didn't come first: $_first" ;;
+esac
+wait_log "tun: kernel lost its v4 group, restoring"
+wait_log "t1: kernel lost its v4 probe route, restoring"
+not_logged "with errors"
+has "blackhole 7.7.7.0/24 nhid 10004 dev lo proto 233" ip route show table 10000
+has "blackhole 10.64.0.0/10 nhid 10004 dev lo proto 233" ip route show table 10000
+has "blackhole default nhid 10004 dev lo proto 233" ip route show table 10002
+has "id 10004 group 10000 $RES" nh
+has "default via 10.64.0.1 dev t1 proto 233 metric 1" ip route show table 10001
+goes blackhole 7.7.7.7
+goes blackhole 7.7.7.7 mark 0x40000000
+mark; far $1 ip addr add 10.64.0.1/24 dev f1; far $2 ip addr add 10.64.0.1/24 dev f2
+wait_log "tun: v4 via t1, t2"
+has "7.7.7.0/24 nhid 10004 proto 233" ip route show table 10000
+has "default nhid 10004 proto 233" ip route show table 10002
+same_as_fresh "t1 flap unseen by a probe sync"
 stop
 kill $FAR 2>/dev/null
 

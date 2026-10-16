@@ -1,8 +1,9 @@
 #!/bin/sh
-# The flush, end to end: whatever a crash could leave behind with routebot's
-# proto (and more: tos, v6 source prefixes, multipath, metrics, duplicate
-# keys, more than a chunk of routes), removed on startup and nothing of
-# anyone else's touched; then routebot's own state, removed on exit.
+# Cleaning up, end to end: whatever a crash could leave behind with
+# routebot's proto (and more: tos, v6 source prefixes, multipath, metrics,
+# duplicate keys, more than a chunk of routes), removed by the startup
+# reconcile and nothing of anyone else's touched; then routebot's own
+# state, removed by the flush on exit.
 # usage: tests/flush.sh path/to/routebot
 set -eu
 
@@ -82,9 +83,16 @@ foreign() {
 		ip -6 route show table 300
 }
 
-echo "== startup flush: everything left behind goes, counted right"
+echo "== startup reconcile: everything left behind goes, counted right"
+# no flush at startup: the reconcile deletes every route with proto 233
+# the config doesn't want (here all of them, the one on the group too,
+# before the nexthops), the 2 nexthops outside its range and the 2 rules;
+# it sets the 6 nexthops, the 4 routes (vpn0's table: its default and
+# the blackhole behind, per family) and the 4 rules of the config
 start
-wait_log "flush: removed 2 rules, 2 nexthops and the routes on them, $EXPECT other routes with proto 233"
+wait_log "reconcile: 0 prefix routes in place"
+wait_log "sync (startup): 4 routes set, $((EXPECT + 1)) deleted, 6 nexthops set, 2 deleted, 4 rules added, 2 deleted"
+not_logged "flush: removed"
 not_logged "left"
 not_logged "(with errors)"
 empty ip route show table 300 proto 233
@@ -96,6 +104,8 @@ hasnt "id 20003 group 20001 proto 233" ip nexthop show
 hasnt "32765:	from all fwmark 0x5 lookup 300 proto 233" ip rule
 hasnt "32765:	from all fwmark 0x5 lookup 300 proto 233" ip -6 rule
 foreign
+# routebot's own state is that of a clean start
+same_as_fresh "startup reconcile"
 
 echo "== exit flush: routebot's own state goes"
 has "default nhid 10004 dev vpn0 proto 233" ip route show table 10002

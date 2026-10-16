@@ -12,7 +12,6 @@
 struct link {
 	int ifindex;
 	unsigned flags;
-	unsigned downs;		/* times it lost IFF_UP or IFF_LOWER_UP */
 	char name[IF_NAMESIZE];
 };
 
@@ -33,8 +32,17 @@ struct live {
 
 	uint8_t own_proto;	/* ignore our own default routes */
 	uint32_t gw_table;	/* only default routes from here are tracked */
-	bool dirty;		/* something changed since last resolve */
-	bool resync;		/* events were lost or addresses removed */
+	bool dirty;		/* links or gateways changed since last resolve */
+	bool resync;		/* addresses removed: gateways may be gone unseen */
+	/*
+	 * An event says the kernel may have changed routebot's objects, or
+	 * what it would accept: any link event (a link going down or away
+	 * flushes nexthops and routes silently), an address added or removed
+	 * (a nexthop the kernel refused may now be accepted), a nexthop, rule
+	 * or default route with routebot's proto deleted. Cleared by the
+	 * caller.
+	 */
+	bool poked;
 };
 
 /* What one device looks like to the routing tables, per family. */
@@ -43,7 +51,6 @@ struct ifrender {
 	bool has_gw;
 	int ifindex;
 	uint8_t gw[16];
-	unsigned downs;		/* link's down counter; not part of the rendering */
 };
 
 struct ifview {
@@ -71,7 +78,6 @@ int live_event_cb(const struct nlmsghdr *nlh, void *data);
 void live_resolve(const struct live *l, const struct config *cfg,
                   const char *const *netdev, struct ifview *out);
 
-/* Ignores downs. */
 bool ifrender_eq(const struct ifrender *a, const struct ifrender *b);
 
 #endif

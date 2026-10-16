@@ -132,46 +132,46 @@ unit_member_flip() {
 	S=$(now)
 	frozen sh -c 'ip route del default via 10.1.2.1 dev p2;
 		ip -6 route del default via 2001:db8:1:2::1 dev p2'
-	expect "sync (link event): $((MISC + 2)) routes set, 0 deleted, 2 nexthops set, 2 deleted, 0 rules added, 0 deleted"
+	expect "sync (event): 0 routes set, 0 deleted, 2 nexthops set, 2 deleted, 0 rules added, 0 deleted"
 	[ "$1" = 0 ] && sample member_flip_out
 	quiesce unit:member_flip "$S"
 	S=$(now)
 	frozen sh -c 'ip route add default via 10.1.2.1 dev p2 metric 102;
 		ip -6 route add default via 2001:db8:1:2::1 dev p2 metric 102'
-	expect "sync (link event): 0 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+	expect "sync (event): 0 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted"
 	[ "$1" = 0 ] && sample member_flip_in
 	quiesce unit:member_flip "$S"
 }
 
 # wan0 loses its gateways and gets them back: wan's groups hold the
-# blackhole meanwhile; with no member left the kernel may have deleted
-# them, so their ~5k prefixes are set again going there, not coming back
+# blackhole meanwhile, its ~5k prefixes stay as they are
 unit_blackhole_flip() {
 	S=$(now)
 	frozen sh -c 'ip route del default via 192.0.2.1 dev wan0;
 		ip -6 route del default via 2001:db8::1 dev wan0'
-	expect "sync (link event): $((MISC + 2)) routes set, 0 deleted, 2 nexthops set, 2 deleted, 0 rules added, 0 deleted"
+	expect "sync (event): 0 routes set, 0 deleted, 2 nexthops set, 2 deleted, 0 rules added, 0 deleted"
 	[ "$1" = 0 ] && sample blackhole_flip_out
 	quiesce unit:blackhole_flip "$S"
 	S=$(now)
 	frozen sh -c 'ip route add default via 192.0.2.1 dev wan0 metric 10;
 		ip -6 route add default via 2001:db8::1 dev wan0 metric 10'
-	expect "sync (link event): 0 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+	expect "sync (event): 0 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted"
 	[ "$1" = 0 ] && sample blackhole_flip_in
 	quiesce unit:blackhole_flip "$S"
 }
 
 # p2 goes down and comes back in one batch, which also takes its v6 address
 # and default routes; the kernel deleted its nexthops, dropping them from
-# pool. Everything is re-sent here ("sync (link flap)").
+# pool. Trunk re-sent everything here ("sync (link flap)"), now only what
+# the kernel lost is ("sync (event)"); tests/netns.sh checks the counts.
 unit_link_flap() {
 	S=$(now)
 	frozen sh -c 'ip link set p2 down; ip link set p2 up
 		ip -6 addr add 2001:db8:1:2::2/64 dev p2 nodad
 		ip route add default via 10.1.2.1 dev p2 metric 102
 		ip -6 route add default via 2001:db8:1:2::1 dev p2 metric 102'
-	expect "link flap on p2, re-syncing"
-	expect "sync (link "
+	expect "p2: kernel lost its v4 nexthop, restoring"
+	expect "sync (event)"
 	[ "$1" = 0 ] && sample link_flap
 	quiesce unit:link_flap "$S"
 	# p2 (10014, 10015) is back in pool (10012, 10013)
@@ -231,8 +231,8 @@ snap exit "$(echo "$S $E" | awk '{ printf "%.6f", ($2 - $1) / 1e9 }')"
 [ "$FAILS" = 0 ] || finish
 
 # --- restart_dirty ---
-# routebot is killed with everything installed; a new one flushes what it
-# left behind and installs it all again: from exec until idle
+# routebot is killed with everything installed; a new one reconciles what
+# it left behind with the config in place: from exec until idle
 say "restart_dirty"
 cp "$T/m03.orig" "$L/misc/m03.lst"
 rb_env() { RB_ENV="env LD_PRELOAD=$SHIM MALLOCSTAT_FILE=$CNT ROUTEBOT_UBUS_SOCKET=$T/ubus.sock"; }
@@ -247,8 +247,13 @@ SINCE=$(now)
 start >> "$CHECKS"
 [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null || { fail "routebot didn't start after a crash"; finish; }
 quiesce restart_dirty "$SINCE"
-expect "flush: removed 10 rules, "
-sample restart_dirty_flush "flush: "
+# no flush: every prefix route is in place already, and so is the rest,
+# which leaves the startup sync nothing to do (logged at debug level only)
+expect "reconcile: $((V4 + V6)) prefix routes in place"
+sample restart_dirty_reconcile "reconcile: "
+if tail -n +"$((MARK + 1))" "$LOG" | grep -q "sync (startup): [0-9]"; then
+	fail "restart_dirty: the startup sync changed something: $(tail -n +"$((MARK + 1))" "$LOG" | grep "sync (startup)")"
+fi
 kstate > "$T/state.dirty"
 if cmp -s "$T/state.clean" "$T/state.dirty"; then
 	pass "restart_dirty: same state as a clean start" >> "$CHECKS"

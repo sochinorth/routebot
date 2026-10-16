@@ -8,7 +8,7 @@ fail and config gets reloaded.
 A group bundles one or more devices into a resilient ECMP nexthop group.
 Members that are down or fail their probes drop out; when no member is left,
 the group's traffic is blackholed instead of leaking out another uplink.
-Its routes point at the group either way: mostly only the group changes.
+Its routes stay put either way: only the group changes.
 
 Needs kernel 5.13 or newer (resilient nexthop groups).
 
@@ -69,7 +69,8 @@ distinct fwmark, so their order doesn't matter.
   through to the next rule, normally `main`.
 - **Marked traffic** goes to its group's table, which holds a default route
   through the group, and behind it a blackhole default with the highest
-  metric there is. The kernel deletes a group whose last member's link goes
+  metric there is. Every group has its table, fwmark or not; only the rule
+  needs a fwmark. The kernel deletes a group whose last member's link goes
   down, and every route on it, before routebot hears of it: marked traffic
   is dropped then rather than falling through to `main`, until routebot
   puts the group back (CIDR traffic does fall through for that moment).
@@ -85,18 +86,61 @@ position, so adding or removing a group at the end doesn't renumber the rest.
 Every group exists at all times, per family: with its usable members, or
 with the blackhole nexthop of its family when none is left (the kernel
 allows a blackhole only on its own). Routes point at the group whatever its
-members, so a member leaving or joining, and a group coming back, is a
-single group replace with no route rewritten. When the last member's link
-goes down the kernel deletes the group behind routebot's back, with its
-routes: so a group left with none of its members (going dark, or on to
-other members) is set again with its routes, gone or not. A link that went
-down and came back before routebot looked has everything re-sent.
+members, so a member leaving or joining, and a group going dark or coming
+back, is a single group replace with no route rewritten.
 
 Everything is applied for both IPv4 and IPv6. Every rule, route and nexthop is
 tagged with `rt_proto`, so routebot can clean up after itself. On exit it
-removes all of it, and on startup it removes anything left behind by a crash.
-It refuses to start if a nexthop id in its range (`nexthop_id` to the
-last device or group) belongs to someone else.
+removes all of it. It refuses to start if a nexthop id in its range
+(`nexthop_id` to the last device or group) belongs to someone else.
+
+### Keeping the kernel in sync
+
+The kernel changes routebot's objects behind its back: a link going down
+deletes its member nexthops, a group left empty is deleted with every route
+on it, removing a device's last IPv4 address drops the probe routes on it.
+So routebot never trusts its memory of what it installed. On every link
+or address event, deletion of one of its routes, rules or nexthops, netifd
+change, probe verdict and reload, it computes what it wants, dumps what
+the kernel holds of its nexthops, rules, group tables and probe table (tens
+of objects), and sets what's missing or different and deletes what's extra,
+logging what the kernel lost (`wan: kernel lost its v4 group, restoring`).
+
+The CIDR table is too big to dump on every event. Its routes are believed
+to be there, which is safe because the kernel removes them only by deleting
+their group, and when it does, it deletes the group's default route in the
+group's table as well: that route is the group's witness. If it's missing,
+routebot sets all of the group's prefix routes again.
+
+Where belief can't be trusted (at startup, after a request failed, after
+events were lost), routebot reconciles everything: it streams the CIDR
+table and its other routes from the kernel, checks each against the sorted
+lists, and fixes what's wrong in place, blackholing what's wrong first. At startup this takes over what a crashed routebot left
+behind without a gap: what's already right stays, what's wrong is replaced,
+what's left over is deleted after. Failed requests are retried after 1
+second, then every 30 seconds (sooner on the next event).
+
+A member nexthop the kernel refuses (its device has IPv6 disabled, a
+pinned gateway isn't on-link yet) is left out of its groups and logged
+(`vpn: kernel refused its v6 nexthop, left out`), along with its probe
+route; the next sync, on the next event (an address appearing is one),
+tries again. What the kernel already holds as wanted stays.
+
+A config change never sends one group's traffic through another group's
+uplinks: a nexthop id or group table that changes hands (groups reordered
+or removed, devices renumbered) is emptied first, its prefix routes turned
+into plain blackholes and its rules removed, and only then filled for the
+new owner. A layout change (`table_id`, `rule_prio`, `nexthop_id` or
+`rt_proto`) drops listed and marked traffic briefly while it's applied,
+never leaks it.
+
+What routebot can't fix: when a group's last member's link goes down, the
+kernel deletes the group's prefix routes, and listed traffic falls through
+to `main` (or to a covering prefix another group lists) until routebot has
+set them again (milliseconds for a few thousand prefixes, about a second
+for 500k). Rules with routebot's
+`rt_proto` and selectors routebot never uses (`iif`, `from`, ...), and
+second routes under the key of one of its own, are left alone.
 
 ## Configuration
 
@@ -149,8 +193,9 @@ config rule 'misc'
   its current L3 device (`pppoe-wan`) over ubus; any other name is taken as a
   Linux device. Without any entry, the section name is the device.
 - A device may belong to several groups.
-- `fwmark` is optional. Without it, the group gets no table or rule of its own
-  and can only be used as a target for rules.
+- `fwmark` is optional. Without it, the group gets no rule (its table holds
+  its default route all the same) and can only be used as a target for
+  rules.
 - A member is usable while its link is up with carrier, it has a gateway (or
   is point-to-point / no-ARP), and its probes pass.
 
@@ -185,6 +230,10 @@ config rule 'misc'
 - `buckets` can't be changed in place: changing it re-creates the group on
   reload. Its prefix routes become plain blackholes first and point at the
   group again after, so its traffic is dropped meanwhile, never leaked.
+- A group replace makes the kernel announce every route on the group again
+  (`net.ipv4.nexthop_compat_mode=1`, the default), which costs CPU with big
+  lists; routebot doesn't need those announcements, so with nothing else
+  relying on them, set `net.ipv4.nexthop_compat_mode=0`.
 - Which flow lands in which bucket is the kernel's multipath hash.
   `net.ipv4.fib_multipath_hash_policy=0` (the default, L3) keeps each
   client-destination pair on one exit. Policy 3 with
@@ -309,11 +358,11 @@ CPU per unit:
 | unit | what happens |
 |---|---|
 | `startup` | exec until idle after "running" (once) |
-| `restart_dirty` | the same, after a routebot with everything installed was killed with SIGKILL: the flush, then a full install (once); the state must equal a clean start's |
+| `restart_dirty` | the same, after a routebot with everything installed was killed with SIGKILL: the startup reconcile finds it all in place (once); the state must equal a clean start's |
 | `link_noop` | an unrelated dummy link is created and deleted |
 | `member_flip` | a `pool` member loses its default routes and gets them back: group replace, no prefix route touched |
-| `blackhole_flip` | `wan` loses its default routes and gets them back: its groups hold the blackhole meanwhile; its ~5k prefixes are set again going there, left alone coming back |
-| `link_flap` | a `pool` member goes down and up in one batch: every route, nexthop and rule is re-sent |
+| `blackhole_flip` | `wan` loses its default routes and gets them back: its groups hold the blackhole meanwhile, its ~5k prefixes are left alone |
+| `link_flap` | a `pool` member goes down and up in one batch: its nexthops and pool's groups are re-set, no prefix route |
 | `reload_noop` | SIGHUP, nothing changed |
 | `reload_small` | SIGHUP after a misc file changed by 100 lines each way |
 
