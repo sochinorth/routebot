@@ -468,24 +468,10 @@ static bool error_expected(uint16_t type, int error)
 	return false;
 }
 
-struct attr_tb {
-	const struct nlattr *tb[32];
-};
-
-static int attr_collect(const struct nlattr *a, void *data)
-{
-	struct attr_tb *t = data;
-	unsigned type = mnl_attr_get_type(a);
-
-	if (type < 32)
-		t->tb[type] = a;
-	return MNL_CB_OK;
-}
-
 static void describe_req(const struct nlmsghdr *req, bool capped, char *buf, size_t len)
 {
 	const char *op;
-	struct attr_tb t = {};
+	struct ptb t = {};
 
 	switch (req->nlmsg_type) {
 	case RTM_NEWROUTE: op = "route set"; break;
@@ -508,7 +494,7 @@ static void describe_req(const struct nlmsghdr *req, bool capped, char *buf, siz
 		const struct rtmsg *rtm = mnl_nlmsg_get_payload(req);
 		char addr[INET6_ADDRSTRLEN] = "default";
 
-		mnl_attr_parse(req, sizeof(*rtm), attr_collect, &t);
+		mnl_attr_parse(req, sizeof(*rtm), ptb_cb, &t);
 		if (t.tb[RTA_DST])
 			inet_ntop(rtm->rtm_family, mnl_attr_get_payload(t.tb[RTA_DST]),
 			          addr, sizeof(addr));
@@ -522,7 +508,7 @@ static void describe_req(const struct nlmsghdr *req, bool capped, char *buf, siz
 	} else if (req->nlmsg_type == RTM_NEWNEXTHOP || req->nlmsg_type == RTM_DELNEXTHOP) {
 		const struct nhmsg *nhm = mnl_nlmsg_get_payload(req);
 
-		mnl_attr_parse(req, sizeof(*nhm), attr_collect, &t);
+		mnl_attr_parse(req, sizeof(*nhm), ptb_cb, &t);
 		snprintf(buf, len, "%s id %u", op,
 		         t.tb[NHA_ID] ? mnl_attr_get_u32(t.tb[NHA_ID]) : 0);
 		if (t.tb[NHA_GROUP]) {
@@ -535,7 +521,7 @@ static void describe_req(const struct nlmsghdr *req, bool capped, char *buf, siz
 	} else {
 		const struct fib_rule_hdr *frh = mnl_nlmsg_get_payload(req);
 
-		mnl_attr_parse(req, sizeof(*frh), attr_collect, &t);
+		mnl_attr_parse(req, sizeof(*frh), ptb_cb, &t);
 		snprintf(buf, len, "%s %s prio %u", op,
 		         frh->family == AF_INET6 ? "v6" : "v4",
 		         t.tb[FRA_PRIORITY] ? mnl_attr_get_u32(t.tb[FRA_PRIORITY]) : 0);
@@ -545,7 +531,7 @@ static void describe_req(const struct nlmsghdr *req, bool capped, char *buf, siz
 /* What req was about, for nl->refused. */
 static void note_refused(struct nl *nl, const struct nlmsghdr *req, int error)
 {
-	struct attr_tb t = {};
+	struct ptb t = {};
 	struct nl_refused *r;
 
 	if (nl->n_refused == nl->cap_refused) {
@@ -567,19 +553,16 @@ static void note_refused(struct nl *nl, const struct nlmsghdr *req, int error)
 		const struct nhmsg *nhm = mnl_nlmsg_get_payload(req);
 
 		r->family = nhm->nh_family;
-		mnl_attr_parse(req, sizeof(*nhm), attr_collect, &t);
-		if (t.tb[NHA_ID] && mnl_attr_get_payload_len(t.tb[NHA_ID]) >= 4)
-			r->id = mnl_attr_get_u32(t.tb[NHA_ID]);
+		mnl_attr_parse(req, sizeof(*nhm), ptb_cb, &t);
+		ptb_u32(&t, NHA_ID, &r->id);
 	} else if (req->nlmsg_type == RTM_NEWROUTE || req->nlmsg_type == RTM_DELROUTE) {
 		const struct rtmsg *rtm = mnl_nlmsg_get_payload(req);
 
 		r->family = rtm->rtm_family;
 		r->table = rtm->rtm_table;
-		mnl_attr_parse(req, sizeof(*rtm), attr_collect, &t);
-		if (t.tb[RTA_TABLE] && mnl_attr_get_payload_len(t.tb[RTA_TABLE]) >= 4)
-			r->table = mnl_attr_get_u32(t.tb[RTA_TABLE]);
-		if (t.tb[RTA_PRIORITY] && mnl_attr_get_payload_len(t.tb[RTA_PRIORITY]) >= 4)
-			r->metric = mnl_attr_get_u32(t.tb[RTA_PRIORITY]);
+		mnl_attr_parse(req, sizeof(*rtm), ptb_cb, &t);
+		ptb_u32(&t, RTA_TABLE, &r->table);
+		ptb_u32(&t, RTA_PRIORITY, &r->metric);
 	}
 }
 
@@ -604,12 +587,12 @@ static void handle_error(struct nl *nl, const struct nlmsghdr *nlh)
 		return;
 
 	if (nlh->nlmsg_flags & NLM_F_ACK_TLVS) {
-		struct attr_tb t = {};
+		struct ptb t = {};
 		size_t off = sizeof(*e);
 
 		if (!capped)
 			off += e->msg.nlmsg_len - sizeof(e->msg);
-		mnl_attr_parse(nlh, off, attr_collect, &t);
+		mnl_attr_parse(nlh, off, ptb_cb, &t);
 		if (t.tb[NLMSGERR_ATTR_MSG])
 			ext = mnl_attr_get_str(t.tb[NLMSGERR_ATTR_MSG]);
 	}
@@ -696,69 +679,23 @@ unsigned nl_batch_end(struct nl *nl)
 	return nl->n_errors;
 }
 
-void nl_route(struct nl *nl, enum nl_op op, const struct route_spec *r)
+/* A route request's header and key; a delete matches any type and scope. */
+static struct nlmsghdr *route_put(struct nl *nl, enum nl_op op, const struct route_key *k,
+                                  uint8_t proto, uint8_t type, uint8_t scope)
 {
-	size_t alen = r->family == AF_INET ? 4 : 16;
-	struct nlmsghdr *nlh;
-	struct rtmsg *rtm;
+	size_t alen = family_alen(k->family);
+	struct nlmsghdr *nlh = batch_put(nl, op == NL_DEL ? RTM_DELROUTE : RTM_NEWROUTE,
+	                                 op == NL_DEL ? 0 : NLM_F_CREATE | NLM_F_REPLACE);
+	struct rtmsg *rtm = mnl_nlmsg_put_extra_header(nlh, sizeof(*rtm));
 
-	nlh = batch_put(nl, op == NL_DEL ? RTM_DELROUTE : RTM_NEWROUTE,
-			op == NL_DEL ? 0 : NLM_F_CREATE | NLM_F_REPLACE);
-	rtm = mnl_nlmsg_put_extra_header(nlh, sizeof(*rtm));
-	rtm->rtm_family = r->family;
-	rtm->rtm_dst_len = r->plen;
-	rtm->rtm_table = r->table < 256 ? r->table : RT_TABLE_UNSPEC;
-	rtm->rtm_protocol = r->proto;
-
-	if (op == NL_DEL) {
-		rtm->rtm_scope = RT_SCOPE_NOWHERE;
-		rtm->rtm_type = RTN_UNSPEC;
-	} else {
-		rtm->rtm_type = r->type;
-		rtm->rtm_scope = (r->type == RTN_UNICAST && !r->has_gw && !r->nh_id) ?
-		                 RT_SCOPE_LINK : RT_SCOPE_UNIVERSE;
-	}
-
-	mnl_attr_put_u32(nlh, RTA_TABLE, r->table);
-	if (r->plen)
-		mnl_attr_put(nlh, RTA_DST, alen, r->dst);
-	if (r->metric)
-		mnl_attr_put_u32(nlh, RTA_PRIORITY, r->metric);
-	if (op != NL_DEL && r->type == RTN_UNICAST) {
-		if (r->nh_id) {
-			mnl_attr_put_u32(nlh, RTA_NH_ID, r->nh_id);
-		} else {
-			mnl_attr_put_u32(nlh, RTA_OIF, r->oif);
-			if (r->has_gw)
-				mnl_attr_put(nlh, RTA_GATEWAY, alen, r->gw);
-		}
-	}
-
-	batch_next(nl);
-}
-
-void nl_route_key(struct nl *nl, enum nl_op op, const struct route_key *k, uint8_t proto)
-{
-	size_t alen = k->family == AF_INET ? 4 : 16;
-	struct nlmsghdr *nlh;
-	struct rtmsg *rtm;
-
-	nlh = batch_put(nl, op == NL_DEL ? RTM_DELROUTE : RTM_NEWROUTE,
-			op == NL_DEL ? 0 : NLM_F_CREATE | NLM_F_REPLACE);
-	rtm = mnl_nlmsg_put_extra_header(nlh, sizeof(*rtm));
 	rtm->rtm_family = k->family;
 	rtm->rtm_dst_len = k->dst_len;
 	rtm->rtm_src_len = k->src_len;
 	rtm->rtm_tos = k->tos;
 	rtm->rtm_table = k->table < 256 ? k->table : RT_TABLE_UNSPEC;
 	rtm->rtm_protocol = proto;
-	if (op == NL_DEL) {
-		rtm->rtm_scope = RT_SCOPE_NOWHERE;
-		rtm->rtm_type = RTN_UNSPEC;
-	} else {
-		rtm->rtm_scope = RT_SCOPE_UNIVERSE;
-		rtm->rtm_type = RTN_BLACKHOLE;
-	}
+	rtm->rtm_type = op == NL_DEL ? RTN_UNSPEC : type;
+	rtm->rtm_scope = op == NL_DEL ? RT_SCOPE_NOWHERE : scope;
 
 	mnl_attr_put_u32(nlh, RTA_TABLE, k->table);
 	if (k->dst_len)
@@ -767,7 +704,35 @@ void nl_route_key(struct nl *nl, enum nl_op op, const struct route_key *k, uint8
 		mnl_attr_put(nlh, RTA_SRC, alen, k->src);
 	if (k->metric)
 		mnl_attr_put_u32(nlh, RTA_PRIORITY, k->metric);
+	return nlh;
+}
 
+void nl_route(struct nl *nl, enum nl_op op, const struct route_spec *r)
+{
+	struct route_key k = {
+		.family = r->family, .dst_len = r->plen, .table = r->table, .metric = r->metric,
+	};
+	struct nlmsghdr *nlh;
+
+	memcpy(k.dst, r->dst, sizeof(k.dst));
+	nlh = route_put(nl, op, &k, r->proto, r->type,
+	                r->type == RTN_UNICAST && !r->has_gw && !r->nh_id ?
+	                RT_SCOPE_LINK : RT_SCOPE_UNIVERSE);
+	if (op != NL_DEL && r->type == RTN_UNICAST) {
+		if (r->nh_id) {
+			mnl_attr_put_u32(nlh, RTA_NH_ID, r->nh_id);
+		} else {
+			mnl_attr_put_u32(nlh, RTA_OIF, r->oif);
+			if (r->has_gw)
+				mnl_attr_put(nlh, RTA_GATEWAY, family_alen(r->family), r->gw);
+		}
+	}
+	batch_next(nl);
+}
+
+void nl_route_key(struct nl *nl, enum nl_op op, const struct route_key *k, uint8_t proto)
+{
+	route_put(nl, op, k, proto, RTN_BLACKHOLE, RT_SCOPE_UNIVERSE);
 	batch_next(nl);
 }
 

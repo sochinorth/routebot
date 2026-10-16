@@ -1289,20 +1289,6 @@ static void log_lost(const struct diff *d)
 		}
 }
 
-/* Delete the doomed: groups first, deleting members empties some. */
-static void nexthops_del_doomed(const struct diff *d)
-{
-	for (int groups = 1; groups >= 0; groups--)
-		for (size_t i = 0; i < d->k->n_nh; i++) {
-			const struct nexthop_spec *kn = &d->k->nh[i];
-
-			if (!!kn->n_grp == groups && idset_has(&d->s->doomed, kn->id)) {
-				nl_nexthop(d->nl, NL_DEL, kn);
-				d->st->nh_del++;
-			}
-		}
-}
-
 /* Does deleting the doomed take a member out of the kernel's group kn? */
 static bool loses_member(const struct diff *d, const struct nexthop_spec *kn)
 {
@@ -1336,14 +1322,17 @@ static void nexthops_set(const struct diff *d, const struct nexthop_spec *n, siz
 	}
 }
 
-/* Delete routebot's nexthops that want hasn't: groups, or the rest. */
-static void nexthops_del_extra(const struct diff *d, bool groups)
+/*
+ * Delete routebot's nexthops, groups or the rest: the doomed, or those
+ * want hasn't. Groups first, deleting members empties some.
+ */
+static void nexthops_del(const struct diff *d, bool groups, bool doomed)
 {
 	for (size_t i = 0; i < d->k->n_nh; i++) {
 		const struct nexthop_spec *kn = &d->k->nh[i];
 
-		if (!!kn->n_grp != groups || !is_ours(d, kn->proto) || plan_nh(d->pw, kn->id) ||
-		    idset_has(&d->s->doomed, kn->id))
+		if (!!kn->n_grp != groups || !is_ours(d, kn->proto) ||
+		    idset_has(&d->s->doomed, kn->id) != doomed || (!doomed && plan_nh(d->pw, kn->id)))
 			continue;
 		nl_nexthop(d->nl, NL_DEL, kn);
 		d->st->nh_del++;
@@ -1553,7 +1542,8 @@ int sync_apply(struct sync *s, struct nl *nl, const struct world *prev,
 	else
 		prefixes_detach(&d);
 	small_routes_del(&d, true);
-	nexthops_del_doomed(&d);
+	nexthops_del(&d, true, true);
+	nexthops_del(&d, false, true);
 	rules_add(&d);
 	rules_del(&d, true);
 	nexthops_set(&d, s->want.members, s->want.n_members);
@@ -1582,8 +1572,8 @@ int sync_apply(struct sync *s, struct nl *nl, const struct world *prev,
 	} else {
 		prefixes_del(&d);
 	}
-	nexthops_del_extra(&d, true);
-	nexthops_del_extra(&d, false);
+	nexthops_del(&d, true, false);
+	nexthops_del(&d, false, false);
 	uncertain += batch_end(&d);
 
 	return uncertain ? -1 : 0;
