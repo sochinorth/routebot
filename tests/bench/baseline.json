@@ -1,65 +1,81 @@
 {
  "memory": {
   "after_10_reloads": {
-   "RssAnon_kB": 12224,
-   "RssFile_kB": 2132,
+   "RssAnon_kB": 12228,
+   "RssFile_kB": 2136,
    "RssShmem_kB": 0,
    "VmData_kB": 15696,
-   "VmHWM_kB": 14356,
-   "VmRSS_kB": 14356,
+   "VmHWM_kB": 14364,
+   "VmRSS_kB": 14364,
    "VmSize_kB": 18556,
    "heap_live_kB": 5768,
    "heap_peak_kB": 15384
   },
   "after_events": {
    "RssAnon_kB": 4276,
-   "RssFile_kB": 2132,
+   "RssFile_kB": 2136,
    "RssShmem_kB": 0,
    "VmData_kB": 6100,
-   "VmHWM_kB": 10068,
-   "VmRSS_kB": 6408,
+   "VmHWM_kB": 10072,
+   "VmRSS_kB": 6412,
    "VmSize_kB": 8960,
    "heap_live_kB": 5772,
    "heap_peak_kB": 9618
   },
   "after_reload": {
-   "RssAnon_kB": 8248,
-   "RssFile_kB": 2132,
+   "RssAnon_kB": 8252,
+   "RssFile_kB": 2136,
    "RssShmem_kB": 0,
    "VmData_kB": 10324,
-   "VmHWM_kB": 14316,
-   "VmRSS_kB": 10380,
+   "VmHWM_kB": 14320,
+   "VmRSS_kB": 10388,
    "VmSize_kB": 13184,
    "heap_live_kB": 5772,
    "heap_peak_kB": 15384
   },
   "end": {
-   "RssAnon_kB": 12248,
-   "RssFile_kB": 2132,
+   "RssAnon_kB": 12252,
+   "RssFile_kB": 2136,
    "RssShmem_kB": 0,
    "VmData_kB": 15700,
-   "VmHWM_kB": 14380,
-   "VmRSS_kB": 14380,
+   "VmHWM_kB": 14388,
+   "VmRSS_kB": 14388,
    "VmSize_kB": 18560,
    "heap_live_kB": 5768,
    "heap_peak_kB": 15384
   },
-  "startup": {
-   "RssAnon_kB": 4276,
+  "exit": {
+   "VmHWM_kB": 25608,
+   "heap_live_kB": 4,
+   "heap_peak_kB": 20115
+  },
+  "restart_dirty": {
+   "RssAnon_kB": 7844,
    "RssFile_kB": 2132,
    "RssShmem_kB": 0,
+   "VmData_kB": 11412,
+   "VmHWM_kB": 19692,
+   "VmRSS_kB": 9976,
+   "VmSize_kB": 14272,
+   "heap_live_kB": 5772,
+   "heap_peak_kB": 20053
+  },
+  "startup": {
+   "RssAnon_kB": 4276,
+   "RssFile_kB": 2136,
+   "RssShmem_kB": 0,
    "VmData_kB": 6100,
-   "VmHWM_kB": 10068,
-   "VmRSS_kB": 6408,
+   "VmHWM_kB": 10072,
+   "VmRSS_kB": 6412,
    "VmSize_kB": 8960,
    "heap_live_kB": 5772,
    "heap_peak_kB": 9618
   }
  },
  "meta": {
-  "binary": "/tmp/claude-1000/-home-sochinorth-routebot/eaf07754-33fd-46e8-a880-432a7811e076/scratchpad/trunk/build-gate-release/routebot",
-  "binary_sha256": "3742f7724f35e699e51d32e92154c0e1181e438a27976f998590db7dd8bdca2e",
-  "date": "2026-10-16T05:46:47Z",
+  "binary": "/tmp/claude-1000/-home-sochinorth-routebot/eaf07754-33fd-46e8-a880-432a7811e076/scratchpad/ad21-trunk/build-gate-release/routebot",
+  "binary_sha256": "1eedd205382690cde68d37e125b8cc10f5570055c17c305d658c11b2897f6574",
+  "date": "2026-10-16T06:45:20Z",
   "exit_status": "0",
   "kernel": "6.18.40.1-microsoft-standard-WSL2",
   "libc": "glibc 2.44",
@@ -70,6 +86,7 @@
    "member_flip_in": "sync (link event): 0 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted",
    "member_flip_out": "sync (link event): 0 routes set, 0 deleted, 2 nexthops set, 2 deleted, 0 rules added, 0 deleted",
    "reload_small": "sync (reload): 100 routes set, 100 deleted, 0 nexthops set, 0 deleted, 0 rules added, 0 deleted",
+   "restart_dirty_flush": "flush: removed 10 rules, 179283 routes, 22 nexthops with proto 233",
    "startup": "sync (startup): 179283 routes set, 0 deleted, 22 nexthops set, 0 deleted, 10 rules added, 0 deleted"
   },
   "machine": "x86_64",
@@ -79,7 +96,9 @@
    "after_events",
    "after_reload",
    "after_10_reloads",
-   "end"
+   "end",
+   "exit",
+   "restart_dirty"
   ],
   "quiet_ms": 300,
   "routes_installed": {
@@ -101,7 +120,12 @@
  "shutdown": {
   "allocs": 13,
   "bytes": 29352960,
-  "heap_live_at_exit_B": 4104
+  "cpu_ms": 513.0,
+  "heap_live_at_exit_B": 4104,
+  "sched_cpu_ms": 501.509814,
+  "sys_ms": 506.6,
+  "user_ms": 6.4,
+  "wall_ms": 593.462
  },
  "units": {
   "blackhole_flip": {
@@ -111,22 +135,22 @@
    "frees": 44.0,
    "n": 50,
    "reallocs": 2.0,
-   "sched_cpu_ms": 23.36214552,
-   "sys_ms": 20.0,
-   "user_ms": 3.4,
-   "wall_ms": 260.349383354187
+   "sched_cpu_ms": 23.25015754,
+   "sys_ms": 19.0,
+   "user_ms": 4.4,
+   "wall_ms": 336.7743110656738
   },
   "link_flap": {
    "allocs": 34.0,
    "bytes": 28154.0,
-   "cpu_ms": 474.0,
+   "cpu_ms": 493.4,
    "frees": 34.0,
    "n": 50,
    "reallocs": 2.0,
-   "sched_cpu_ms": 474.14333048000003,
-   "sys_ms": 467.2,
-   "user_ms": 6.8,
-   "wall_ms": 567.2876739501953
+   "sched_cpu_ms": 493.36442482,
+   "sys_ms": 486.8,
+   "user_ms": 6.6,
+   "wall_ms": 657.297797203064
   },
   "link_noop": {
    "allocs": 21.0,
@@ -135,58 +159,70 @@
    "frees": 21.0,
    "n": 50,
    "reallocs": 1.0,
-   "sched_cpu_ms": 0.0608494,
+   "sched_cpu_ms": 0.0599001,
    "sys_ms": 0.0,
    "user_ms": 0.0,
-   "wall_ms": 94.77455139160156
+   "wall_ms": 67.14497089385986
   },
   "member_flip": {
    "allocs": 44.0,
    "bytes": 36804.0,
-   "cpu_ms": 240.0,
+   "cpu_ms": 234.2,
    "frees": 44.0,
    "n": 50,
    "reallocs": 2.0,
-   "sched_cpu_ms": 239.89573177999998,
-   "sys_ms": 235.6,
-   "user_ms": 4.4,
-   "wall_ms": 468.27964305877686
+   "sched_cpu_ms": 234.40107294,
+   "sys_ms": 230.4,
+   "user_ms": 3.8,
+   "wall_ms": 467.5837230682373
   },
   "reload_noop": {
    "allocs": 201.0,
    "bytes": 15732711.0,
-   "cpu_ms": 32.4,
+   "cpu_ms": 32.0,
    "frees": 201.0,
    "n": 50,
    "reallocs": 20.0,
-   "sched_cpu_ms": 32.39808128,
-   "sys_ms": 1.4,
-   "user_ms": 31.0,
-   "wall_ms": 124.09954071044922
+   "sched_cpu_ms": 32.11710378,
+   "sys_ms": 0.8,
+   "user_ms": 31.2,
+   "wall_ms": 124.28201675415039
   },
   "reload_small": {
    "allocs": 201.0,
    "bytes": 15732711.0,
-   "cpu_ms": 32.4,
+   "cpu_ms": 32.8,
    "frees": 201.0,
    "n": 50,
    "reallocs": 20.0,
-   "sched_cpu_ms": 32.23696388,
+   "sched_cpu_ms": 32.755811640000005,
    "sys_ms": 1.4,
-   "user_ms": 31.0,
-   "wall_ms": 124.27702903747559
+   "user_ms": 31.4,
+   "wall_ms": 124.84599113464355
+  },
+  "restart_dirty": {
+   "allocs": 245.0,
+   "bytes": 45217251.0,
+   "cpu_ms": 830.0,
+   "frees": 204.0,
+   "n": 1,
+   "reallocs": 48.0,
+   "sched_cpu_ms": 838.312578,
+   "sys_ms": 800.0,
+   "user_ms": 30.0,
+   "wall_ms": 958.5340023040771
   },
   "startup": {
    "allocs": 232.0,
    "bytes": 15864291.0,
-   "cpu_ms": 490.0,
+   "cpu_ms": 360.0,
    "frees": 191.0,
    "n": 1,
    "reallocs": 38.0,
-   "sched_cpu_ms": 500.230575,
-   "sys_ms": 450.0,
-   "user_ms": 40.0,
-   "wall_ms": 644.0105438232422
+   "sched_cpu_ms": 361.039306,
+   "sys_ms": 330.0,
+   "user_ms": 30.0,
+   "wall_ms": 433.5787296295166
   }
  },
  "workload": {
