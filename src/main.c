@@ -43,10 +43,9 @@ static struct {
 	struct snap spare;	/* cfg's next snapshot is built here */
 	struct snap extra;	/* cfg's other buffer, while applied isn't cfg's */
 	/*
-	 * The world last applied successfully, cfg NULL until then. It may be
-	 * of an older config (a reload whose sync failed), which it then owns
-	 * along with its buffer. Worlds tried since may be half-applied: prev
-	 * stays this one, so their ids count as changing owner.
+	 * The world last applied successfully (cfg NULL until then), maybe of
+	 * an older config, which it then owns. It stays prev while later
+	 * worlds, maybe half-applied, are tried.
 	 */
 	struct snap applied;
 	bool certain;		/* the last sync_apply() returned 0 */
@@ -436,9 +435,8 @@ static void reload(void)
 		return;
 	}
 	/*
-	 * Syncs observe the protos of prev (rb.applied) and want only. Keep
-	 * the kernel to those: a failed sync may have left the current
-	 * config's proto behind, and it is about to be neither.
+	 * Syncs observe prev's and want's protos only: a failed sync may have
+	 * left the current config's behind, about to be neither.
 	 */
 	if (rb.cfg->rt_proto != cfg->rt_proto &&
 	    (!rb.applied.cfg || rb.applied.cfg->rt_proto != rb.cfg->rt_proto))
@@ -480,9 +478,8 @@ static void ev_cb(struct uloop_fd *fd, unsigned events)
 		full = true;
 	}
 	/*
-	 * After a failure the pending retry, a full sync, sees all of it: soon,
-	 * but not right away, or a sync that keeps failing could keep poking
-	 * itself with what it does succeed in.
+	 * After a failure the pending full sync sees all of it: soon, not at
+	 * once, or a sync that keeps failing would keep poking itself.
 	 */
 	if (!rb.certain && rb.retry.pending) {
 		if (uloop_timeout_remaining64(&rb.retry) > RETRY_FIRST_MS)

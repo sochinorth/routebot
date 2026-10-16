@@ -11,10 +11,7 @@ struct kctx {
 	bool oom;
 };
 
-/*
- * Make room for one more element; false (and oom set) if out of memory.
- * The callbacks then go on reading: the dump has to be drained.
- */
+/* Room for one more; false and oom set if none: the dump is drained still. */
 static bool grow(struct kctx *c, void **p, size_t *cap, size_t n, size_t size)
 {
 	size_t ncap;
@@ -55,10 +52,7 @@ static int nh_cb(const struct nlmsghdr *nlh, void *data)
 	struct kstate *k = c->k;
 	struct nexthop_spec n;
 
-	/*
-	 * A group too large to parse still has id and proto filled: keep it,
-	 * it matches nothing routebot wants and so gets replaced.
-	 */
+	/* a group too large to parse has id and proto: kept, and replaced */
 	if (nl_parse_nexthop(nlh, &n) && !n.id)
 		return MNL_CB_OK;
 	if (!proto_in(c->s, n.proto) && !id_in(c->s, n.id))

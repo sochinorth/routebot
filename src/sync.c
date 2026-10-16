@@ -23,7 +23,7 @@ static const char *fam_name(int f)
 	return f ? "v6" : "v4";
 }
 
-/* Make room for n elements of size bytes in *p (a pointer to a pointer). */
+/* Make room for n elements of size bytes in *p. */
 static int reserve(void *p, size_t *cap, size_t n, size_t size)
 {
 	void **pp = p, *np;
@@ -191,11 +191,9 @@ static void gen_groups(const struct world *w, struct plan *p)
 }
 
 /*
- * Every group's table holds a default route through the group, fwmark or
- * not: the group's witness. The kernel deletes it along with the group and
- * every route on it, so while it's there, so are the group's prefix routes.
- * Behind it, a blackhole: should the group go, marked traffic is dropped
- * rather than falling through to the next rule.
+ * Every group's table holds a default route through the group: its
+ * witness, which the kernel deletes along with the group and every route
+ * on it. Behind it a blackhole: without the group, traffic is dropped.
  */
 static void gen_small(const struct world *w, struct plan *p)
 {
@@ -352,8 +350,8 @@ static bool route_key_eq(const struct route_spec *a, const struct kroute *k)
 }
 
 /*
- * The same route. One on a nexthop is reported as a blackhole while its
- * group holds the blackhole nexthop: only the nexthop counts then.
+ * The same route. The kernel reports one on a group that holds the
+ * blackhole nexthop as a blackhole: only the nexthop counts then.
  */
 static bool route_eq(const struct route_spec *a, const struct kroute *k)
 {
@@ -552,10 +550,7 @@ static bool observed_table(const struct diff *d, uint32_t t)
 	return false;
 }
 
-/*
- * The probe table and every group table of c, not a prefix table (as
- * across a reload that moves table_id): never dumped on the way.
- */
+/* c's group and probe tables, never a CIDR table (table_id may move). */
 static int add_tables(struct diff *d, const struct config *c)
 {
 	struct sync *s = d->s;
@@ -598,7 +593,7 @@ static int observe(struct diff *d)
 	return kstate_observe(d->nl, &sc, &d->s->k);
 }
 
-/* A nexthop in want's id range that isn't routebot's: hands off, nothing can be done. */
+/* A nexthop in want's id range that isn't routebot's. */
 static const struct nexthop_spec *foreign_nh(const struct diff *d)
 {
 	for (size_t i = 0; i < d->k->n_nh; i++) {
@@ -611,11 +606,7 @@ static const struct nexthop_spec *foreign_nh(const struct diff *d)
 	return NULL;
 }
 
-/*
- * Leave the refused members out of want: out of their groups (a group
- * left with none holds the blackhole), along with their probe routes,
- * which the kernel would refuse as well.
- */
+/* Leave the refused members out of want: their groups, their probe routes. */
 static void plan_drop(struct plan *p, const struct config *c, const struct idset *refused)
 {
 	size_t out = 0;
@@ -650,10 +641,9 @@ static void plan_drop(struct plan *p, const struct config *c, const struct idset
 }
 
 /*
- * End a batch. A member nexthop the kernel refuses (its device has IPv6
- * disabled, a gateway isn't on-link) is a known outcome: it isn't there,
- * it's left out of the groups set after, and the next sync tries again.
- * Anything else leaves the kernel uncertain. Returns the uncertain ones.
+ * End a batch. A member nexthop the kernel refuses (IPv6 disabled, gateway
+ * not on-link) is left out, tried again next sync; any other error leaves
+ * the kernel uncertain. Returns the uncertain ones.
  */
 static unsigned batch_end(struct diff *d)
 {
@@ -779,19 +769,15 @@ static long prefix_find(const struct config *c, int f, const uint8_t *addr, uint
 	return -1;
 }
 
-/*
- * Same table and tag means old and new routes share keys and can be
- * merge-walked; otherwise they are disjoint sets.
- */
+/* Same table and tag: old and new prefix routes share keys, merge-walked. */
 static bool prefixes_comparable(const struct config *oc, const struct config *nc)
 {
 	return oc && nc && oc->table_id == nc->table_id && oc->rt_proto == nc->rt_proto;
 }
 
 /*
- * Old and new hold the very same family f list (the same config, or one
- * shared across a reload): same keys and rule indexes, nothing to merge or
- * delete. A rule may still map to another group.
+ * Old and new share the family f list itself: same keys and rule indexes,
+ * though a rule may map to another group.
  */
 static bool prefixes_shared(const struct config *oc, const struct config *nc, int f)
 {
@@ -809,9 +795,8 @@ static bool rules_on(const struct config *c, int f, const struct idset *ids)
 }
 
 /*
- * Believed: prev's prefix routes on the doomed groups become plain
- * blackholes, so that nothing falls through to the next rule, nor goes
- * through another group, until they point at their group again.
+ * Believed: prev's prefix routes on doomed groups become blackholes until
+ * set again, rather than falling through or going through another group.
  */
 static void prefixes_detach(const struct diff *d)
 {
@@ -827,9 +812,8 @@ static void prefixes_detach(const struct diff *d)
 }
 
 /*
- * A believed prefix route depends on nothing but its group's nexthop,
- * given comparable table and tag: it changed if that nexthop id did, or if
- * the group was (or will be) deleted, taking the route along.
+ * A believed prefix route changed if its group's nexthop id did, or if the
+ * group is (to be) deleted, taking the route along.
  */
 static bool prefix_changed(const struct diff *d, int f, uint16_t orule, uint16_t nrule)
 {
@@ -865,10 +849,9 @@ static int prefix_cmp(const struct config *a, size_t i, const struct config *b, 
 }
 
 /*
- * Believed: set every prefix route of want that prev hasn't, or not as it
- * is. Walked backwards, (addr, plen) descending: a prefix comes before any
- * that covers it, so traffic never meets a covering route of another group
- * first, as it would while the more specific one isn't set yet.
+ * Believed: set want's prefix routes prev hasn't as they are. Backwards: a
+ * prefix is set before any that covers it, so no traffic meets the
+ * covering route of another group first.
  */
 static void prefixes_set(const struct diff *d)
 {
@@ -958,11 +941,7 @@ static long wanted_prefix(const struct config *c, const struct kroute *k, int *f
 	return prefix_find(c, *f, r->dst, r->plen);
 }
 
-/*
- * A route of routebot's that want has no place for: not in an observed
- * table (their routes are diffed one by one), no key of want's small
- * routes or prefix routes.
- */
+/* A route of routebot's that want has no key for, outside the observed tables. */
 static bool route_unwanted(const struct diff *d, const struct kroute *k)
 {
 	int f;
@@ -972,9 +951,8 @@ static bool route_unwanted(const struct diff *d, const struct kroute *k)
 }
 
 /*
- * An unwanted route that must not be left as it is while the nexthops and
- * rules change: on a nexthop that goes, or in one of want's own tables
- * (left over from another role, under another rule).
+ * An unwanted route to take off before nexthops and rules change: on a
+ * nexthop that goes, or in one of want's tables.
  */
 static bool unwanted_off(const struct diff *d, const struct kroute *k)
 {
@@ -1010,10 +988,7 @@ static int scan_cb(const struct nlmsghdr *nlh, void *data)
 	           !idset_has(&d->s->doomed, k.r.nh_id)) {
 		bit_set(d->s->bits, bit_index(d->wc, f, i), BIT_OK);
 	} else {
-		/*
-		 * Wrong, whatever it is (another group's nexthop, another
-		 * table's role, one that goes): off it first, set after
-		 */
+		/* wrong, whatever it is: off it first, set after */
 		bit_set(d->s->bits, bit_index(d->wc, f, i), BIT_DETACH);
 	}
 	return MNL_CB_OK;
@@ -1040,14 +1015,11 @@ static int scan_routes(const struct diff *d, struct scan *sc)
 }
 
 /*
- * Requests for routes known by dumping alone: every route with proto that
- * pred() holds for (all, if NULL) gets op, queued right from the dump's callback (dumps
- * have their own socket: the batch goes out between two of its datagrams,
- * and the kernel's dump goes on from where it was, routes gone or not). A
- * request that succeeds makes pred() false (the route is gone, or a
- * blackhole off any nexthop); one more dump checks that, and catches what a
- * dump resumed after deletions may have skipped. Memory stays bounded,
- * time linear in the routes.
+ * Requests for routes known only from a dump: each route with proto that
+ * pred() holds for (all if NULL) gets op, queued from the dump's callback
+ * (dumps have their own socket; the kernel resumes a dump where it was,
+ * routes gone or not). Success makes pred() false; another dump checks
+ * that and catches what a resumed dump skipped. Memory stays bounded.
  */
 struct sweep {
 	struct nl *nl;
@@ -1172,12 +1144,11 @@ static void prefixes_full_set(const struct diff *d)
 /* --- the small objects --- */
 
 /*
- * Kernel nexthops to delete and make anew: those the kernel can't replace
- * into what want has at their id; those that stand for something else now
- * (another group or device: replaced in place, they'd send the routes
- * still on them through another group's uplinks); and, where prev doesn't
- * say whose they are, those that differ. Deleting a member drops it from
- * its groups, and a group left empty goes too: doomed as well.
+ * Kernel nexthops to delete and make anew: those a replace can't turn into
+ * want's, those that now stand for another group or device (replaced, the
+ * routes on them would take another group's uplinks) and, where prev
+ * doesn't say whose they are, those that differ. The kernel deletes a
+ * group left without members: doomed too.
  */
 static int find_doomed(const struct diff *d)
 {
@@ -1225,10 +1196,7 @@ static bool witness_ok(const struct diff *d, size_t g, int f)
 	return k_nh(d, w.nh_id) && k_has_route(d, &w);
 }
 
-/*
- * Groups whose prefix routes the kernel may have taken (the group or its
- * witness is gone) or will take (doomed): their routes are set again.
- */
+/* Groups whose prefix routes the kernel took or will take: set again. */
 static int find_reset(const struct diff *d)
 {
 	struct idset *reset = &d->s->reset;
@@ -1311,10 +1279,8 @@ static void nexthops_set(const struct diff *d, const struct nexthop_spec *n, siz
 		    !loses_member(d, kn))
 			continue;
 		/*
-		 * One the dump showed is only replaced: should the kernel have
-		 * deleted it since, and the routes on it, that fails (and calls
-		 * for a full reconcile) instead of creating it anew under a
-		 * witness that would vouch for routes no longer there.
+		 * one the dump showed is only replaced: if the kernel deleted it
+		 * since, with its routes, that fails rather than vouch for them
 		 */
 		nl_nexthop(d->nl, kn && !idset_has(&d->s->doomed, n[j].id) ? NL_REPLACE : NL_SET,
 		           &n[j]);
@@ -1340,9 +1306,8 @@ static void nexthops_del(const struct diff *d, bool groups, bool doomed)
 }
 
 /*
- * Set want's small routes the kernel doesn't hold as they are: the
- * blackholes behind the group tables' defaults, or the rest. A doomed
- * group's witness goes with it.
+ * Set want's small routes the kernel lacks: the blackholes, or the rest.
+ * A doomed group's witness goes with it.
  */
 static void small_routes_set(const struct diff *d, bool blackholes)
 {
@@ -1358,11 +1323,9 @@ static void small_routes_set(const struct diff *d, bool blackholes)
 }
 
 /*
- * Routebot's routes in the observed tables. A full reconcile trusts
- * nothing: there, any that isn't want's becomes a blackhole first (early),
- * before rules and nexthops change (it may be another role's, an old probe
- * route in what is now a group table, say). In the end, those want has no
- * key for are deleted, but those on a doomed nexthop, gone with it.
+ * Routebot's routes in the observed tables. Early, in a full reconcile:
+ * any not want's becomes a blackhole before rules and nexthops change. In
+ * the end those want has no key for go, but those gone with a doomed nexthop.
  */
 static void small_routes_del(const struct diff *d, bool early)
 {
@@ -1396,11 +1359,9 @@ static void rules_add(const struct diff *d)
 }
 
 /*
- * Delete routebot's rules that want hasn't: those into want's CIDR table,
- * or the rest. A table never gets new content while an old rule of other
- * traffic still points there: old rules into the CIDR table go before it's
- * filled, the rest before the group and probe tables are. Yet they go only
- * once the CIDR table is filled, or listed traffic would meet it empty.
+ * Delete routebot's rules that want hasn't: those into want's CIDR table
+ * (before it's filled), or the rest (after, before the group and probe
+ * tables are): no table gets new content under an old rule.
  */
 static void rules_del(const struct diff *d, bool cidr)
 {
@@ -1432,10 +1393,8 @@ static bool layout_changes(const struct config *pc, const struct config *wc)
 }
 
 /*
- * Before a layout change: every group of prev's the kernel holds becomes
- * its family's blackhole, in place. Whatever is on them, prefix routes and
- * group table defaults, drops traffic until the new layout is set, rather
- * than leaking it to main or another group's uplink.
+ * Before a layout change, prev's groups become their family's blackhole in
+ * place: what's on them drops traffic until the new layout is set.
  */
 static unsigned groups_blackhole(struct diff *d)
 {
