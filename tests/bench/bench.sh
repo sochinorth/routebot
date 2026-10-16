@@ -132,7 +132,7 @@ unit_member_flip() {
 	S=$(now)
 	frozen sh -c 'ip route del default via 10.1.2.1 dev p2;
 		ip -6 route del default via 2001:db8:1:2::1 dev p2'
-	expect "sync (link event): 0 routes set, 0 deleted, 2 nexthops set, 2 deleted, 0 rules added, 0 deleted"
+	expect "sync (link event): $((MISC + 2)) routes set, 0 deleted, 2 nexthops set, 2 deleted, 0 rules added, 0 deleted"
 	[ "$1" = 0 ] && sample member_flip_out
 	quiesce unit:member_flip "$S"
 	S=$(now)
@@ -143,18 +143,20 @@ unit_member_flip() {
 	quiesce unit:member_flip "$S"
 }
 
-# wan0 loses its gateways: wan is blackholed, its prefixes rewritten twice
+# wan0 loses its gateways and gets them back: wan's groups hold the
+# blackhole meanwhile; with no member left the kernel may have deleted
+# them, so their ~5k prefixes are set again going there, not coming back
 unit_blackhole_flip() {
 	S=$(now)
 	frozen sh -c 'ip route del default via 192.0.2.1 dev wan0;
 		ip -6 route del default via 2001:db8::1 dev wan0'
-	expect "sync (link event): $((MISC + 2)) routes set, 0 deleted, 0 nexthops set, 4 deleted, 0 rules added, 0 deleted"
+	expect "sync (link event): $((MISC + 2)) routes set, 0 deleted, 2 nexthops set, 2 deleted, 0 rules added, 0 deleted"
 	[ "$1" = 0 ] && sample blackhole_flip_out
 	quiesce unit:blackhole_flip "$S"
 	S=$(now)
 	frozen sh -c 'ip route add default via 192.0.2.1 dev wan0 metric 10;
 		ip -6 route add default via 2001:db8::1 dev wan0 metric 10'
-	expect "sync (link event): $((MISC + 2)) routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+	expect "sync (link event): 0 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted"
 	[ "$1" = 0 ] && sample blackhole_flip_in
 	quiesce unit:blackhole_flip "$S"
 }

@@ -29,7 +29,11 @@ size_t cfg_member_index(const struct config *c, size_t g, size_t m);
 /* Whether member m of group g is in the group's family f nexthop. */
 bool world_member_usable(const struct world *w, size_t g, size_t m, int f);
 
-/* Bring the kernel from old to new, touching only what differs. */
+/*
+ * Bring the kernel from old to new, touching only what differs, and the
+ * groups that may have gone with their last member's link, with their
+ * routes.
+ */
 void sync_apply(struct nl *nl, const struct world *old, const struct world *new,
 		struct sync_stats *st);
 

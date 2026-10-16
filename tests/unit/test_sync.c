@@ -5,17 +5,26 @@
  * libmnl's), so every batch nl.c sends lands here instead of the kernel: it
  * is applied to a small model with the kernel's semantics (deleting a
  * nexthop deletes the routes on it and drops it from its groups, an emptied
- * group goes too; replace can't change a group's bucket count; routes need
- * their nexthop to exist).
+ * group goes too; a blackhole nexthop is a group's only member or none;
+ * replace can't change a group's bucket count, nor a group into a single
+ * nexthop or back; routes need their nexthop to exist, of their family; a
+ * link going down flushes the nexthops and routes on it).
  *
- * For every pair of worlds (old, new), named scenarios and random ones:
+ * For every pair of worlds (old, new), named scenarios and random ones,
+ * with some of old's links gone down behind sync's back (and still down in
+ * new; a link down and up again is main.c's to re-set):
  *   - empty -> old installs exactly old's prefixes, rendered independently
  *   - old -> new leaves the model equal to empty -> new
- *   - no route set is a no-op replace, no request fails
+ *   - no route set is a no-op replace (unless a group lost all its old
+ *     members: the kernel may have deleted it), no request fails
+ *   - no route in a prefix table ever goes with its nexthop during the
+ *     apply: traffic would fall through to the next rule
  *   - the prefix route requests are exactly, in order, those of the
- *     straightforward diff: every new prefix that is new, or whose group
- *     nexthop changed or was re-created, v4 then v6, then every old prefix
- *     gone from new (all of them when table or tag changed)
+ *     straightforward diff: every old prefix on a group that is deleted or
+ *     emptied during the apply, as a blackhole; then every new prefix that
+ *     is new, or whose group nexthop changed or was (or may have been)
+ *     deleted, v4 then v6; then every old prefix gone from new (all of them
+ *     when table or tag changed)
  */
 #include <arpa/inet.h>
 #include <stdarg.h>
@@ -73,7 +82,7 @@ struct mroute {
 
 struct mnh {
 	uint32_t id;
-	bool group;
+	bool group, blackhole;
 	uint8_t family, proto;
 	int oif;
 	bool has_gw;
@@ -113,9 +122,9 @@ struct rec {
 static struct kernel *K;	/* where requests go */
 static struct rec recs[2 * MAXR];
 static size_t nrecs;
-static unsigned n_failed, n_noop_set, n_msgs;
-static uint32_t nh_deleted[MAXNH], nh_recreated[MAXNH];
-static size_t n_deleted, n_recreated;
+static unsigned n_failed, n_noop_set, n_msgs, n_leaks;
+static bool in_apply;		/* routes dropped now are sync's doing */
+static uint32_t leak_table;	/* the prefix table: nothing may fall through it */
 
 static bool route_key_same(const struct mroute *a, const struct mroute *b)
 {
@@ -131,13 +140,23 @@ static struct mnh *nh_get(struct kernel *k, uint32_t id)
 	return NULL;
 }
 
-static void routes_drop_nh(struct kernel *k, uint32_t id)
+static void routes_drop(struct kernel *k, uint32_t nh_id, int oif)
 {
 	size_t w = 0;
 
-	for (size_t i = 0; i < k->nr; i++)
-		if (k->r[i].nh_id != id)
+	for (size_t i = 0; i < k->nr; i++) {
+		const struct mroute *r = &k->r[i];
+
+		if (nh_id ? r->nh_id != nh_id : r->oif != oif || r->nh_id) {
 			k->r[w++] = k->r[i];
+			continue;
+		}
+		if (in_apply && r->table == leak_table) {
+			n_leaks++;
+			fprintf(stderr, "route table %u plen %u went with nexthop %u\n",
+			        r->table, r->plen, nh_id);
+		}
+	}
 	k->nr = w;
 }
 
@@ -150,7 +169,7 @@ static void nh_remove(struct kernel *k, uint32_t id)
 	if (!n)
 		return;
 	*n = k->nh[--k->nnh];
-	routes_drop_nh(k, id);
+	routes_drop(k, id, 0);
 	for (size_t i = 0; i < k->nnh; i++) {
 		struct mnh *g = &k->nh[i];
 		uint16_t w = 0;
@@ -168,6 +187,18 @@ static void nh_remove(struct kernel *k, uint32_t id)
 	}
 	for (size_t i = 0; i < ne; i++)
 		nh_remove(k, emptied[i]);
+}
+
+/* Link ifindex goes down: its nexthops go, and the routes through it. */
+static void link_flush(struct kernel *k, int ifindex)
+{
+	/* each removal reorders the array: start over */
+	for (size_t i = 0; i < k->nnh; i++)
+		if (!k->nh[i].group && !k->nh[i].blackhole && k->nh[i].oif == ifindex) {
+			nh_remove(k, k->nh[i].id);
+			i = -1;
+		}
+	routes_drop(k, 0, ifindex);
 }
 
 struct attrs {
@@ -224,14 +255,25 @@ static void apply_route(const struct nlmsghdr *nlh)
 	rc->nh_id = r.nh_id;
 	memcpy(rc->dst, r.dst, 16);
 
-	for (i = 0; i < K->nr; i++)
-		if (route_key_same(&K->r[i], &r))
-			break;
-
 	if (nlh->nlmsg_type == RTM_DELROUTE) {
-		/* the kernel matches the protocol when one is given; a miss is ESRCH */
-		if (i < K->nr && (!r.proto || r.proto == K->r[i].proto))
-			K->r[i] = K->r[--K->nr];
+		/*
+		 * The kernel matches the protocol when one is given, and the
+		 * metric unless it's 0: then the lowest one. A miss is ESRCH.
+		 */
+		size_t best = K->nr;
+
+		for (i = 0; i < K->nr; i++) {
+			struct mroute k = K->r[i];
+
+			if (!r.metric)
+				k.metric = 0;
+			if (!route_key_same(&k, &r) || (r.proto && r.proto != k.proto))
+				continue;
+			if (best == K->nr || K->r[i].metric < K->r[best].metric)
+				best = i;
+		}
+		if (best < K->nr)
+			K->r[best] = K->r[--K->nr];
 		return;
 	}
 
@@ -244,11 +286,14 @@ static void apply_route(const struct nlmsghdr *nlh)
 			return;
 		}
 	}
+	for (i = 0; i < K->nr; i++)
+		if (route_key_same(&K->r[i], &r))
+			break;
 	if (i < K->nr) {
 		if (!memcmp(&K->r[i], &r, sizeof(r))) {
 			n_noop_set++;
 			fprintf(stderr, "no-op replace: table %u plen %u nh %u type %u\n",
-				r.table, r.plen, r.nh_id, r.type);
+			        r.table, r.plen, r.nh_id, r.type);
 		}
 		K->r[i] = r;
 		return;
@@ -258,6 +303,13 @@ static void apply_route(const struct nlmsghdr *nlh)
 		return;
 	}
 	K->r[K->nr++] = r;
+}
+
+/* Can the kernel turn o into n with a replace? */
+static bool m_replaceable(const struct mnh *o, const struct mnh *n)
+{
+	return o->group == n->group && o->family == n->family && o->blackhole == n->blackhole &&
+	       (!n->group || o->buckets == n->buckets);
 }
 
 static void apply_nexthop(const struct nlmsghdr *nlh)
@@ -271,10 +323,7 @@ static void apply_nexthop(const struct nlmsghdr *nlh)
 	o = nh_get(K, n.id);
 
 	if (nlh->nlmsg_type == RTM_DELNEXTHOP) {
-		if (o) {
-			nh_deleted[n_deleted++] = n.id;
-			nh_remove(K, n.id);
-		}
+		nh_remove(K, n.id);
 		return;
 	}
 
@@ -288,9 +337,10 @@ static void apply_nexthop(const struct nlmsghdr *nlh)
 		for (uint16_t i = 0; i < n.n; i++) {
 			const struct mnh *m = nh_get(K, g[i].id);
 
-			if (!m || m->group) {
+			if (!m || m->group || (m->blackhole && n.n > 1)) {
 				n_failed++;
-				fprintf(stderr, "group %u: member %u missing\n", n.id, g[i].id);
+				fprintf(stderr, "group %u: member %u missing or can't be\n",
+				        n.id, g[i].id);
 				return;
 			}
 			n.family = m->family;
@@ -300,11 +350,12 @@ static void apply_nexthop(const struct nlmsghdr *nlh)
 		if (t.tb[NHA_RES_GROUP])
 			mnl_attr_parse_nested(t.tb[NHA_RES_GROUP], attrs_cb, &rt);
 		n.buckets = rt.tb[NHA_RES_GROUP_BUCKETS] ?
-			    mnl_attr_get_u16(rt.tb[NHA_RES_GROUP_BUCKETS]) : 0;
+		            mnl_attr_get_u16(rt.tb[NHA_RES_GROUP_BUCKETS]) : 0;
 		n.idle = attr_u32(&rt, NHA_RES_GROUP_IDLE_TIMER, 0);
 		n.busy = attr_u32(&rt, NHA_RES_GROUP_UNBALANCED_TIMER, 0);
 	} else {
 		n.family = nhm->nh_family;
+		n.blackhole = !!t.tb[NHA_BLACKHOLE];
 		n.oif = attr_u32(&t, NHA_OIF, 0);
 		if (t.tb[NHA_GATEWAY]) {
 			n.has_gw = true;
@@ -314,8 +365,7 @@ static void apply_nexthop(const struct nlmsghdr *nlh)
 	}
 
 	if (o) {
-		if (o->group != n.group || o->family != n.family ||
-		    (n.group && o->buckets != n.buckets)) {
+		if (!m_replaceable(o, &n)) {
 			n_failed++;
 			fprintf(stderr, "nexthop %u: replace can't do that\n", n.id);
 			return;
@@ -323,9 +373,6 @@ static void apply_nexthop(const struct nlmsghdr *nlh)
 		*o = n;
 		return;
 	}
-	for (size_t i = 0; i < n_deleted; i++)
-		if (nh_deleted[i] == n.id)
-			nh_recreated[n_recreated++] = n.id;
 	K->nh[K->nnh++] = n;
 }
 
@@ -403,15 +450,16 @@ static char *kernel_text(const struct kernel *k)
 		inet_ntop(r->family, r->gw, g, sizeof(g));
 		lines[l] = malloc(256);
 		snprintf(lines[l++], 256, "route %u %s/%u t%u m%u type%u nh%u oif%d gw%s p%u",
-			 r->family, d, r->plen, r->table, r->metric, r->type, r->nh_id, r->oif,
-			 r->has_gw ? g : "-", r->proto);
+		         r->family, d, r->plen, r->table, r->metric, r->type, r->nh_id, r->oif,
+		         r->has_gw ? g : "-", r->proto);
 	}
 	for (size_t i = 0; i < k->nnh; i++) {
 		const struct mnh *h = &k->nh[i];
 		char *s = malloc(1024);
-		int o = snprintf(s, 1024, "nh %u f%u p%u g%d oif%d gw%d:%02x%02x b%u i%u u%u",
-				 h->id, h->family, h->proto, h->group, h->oif, h->has_gw,
-				 h->gw[0], h->gw[3] ^ h->gw[15], h->buckets, h->idle, h->busy);
+		int o = snprintf(s, 1024, "nh %u f%u p%u g%d bh%d oif%d gw%d:%02x%02x b%u i%u u%u",
+		                 h->id, h->family, h->proto, h->group, h->blackhole, h->oif,
+		                 h->has_gw, h->gw[0], h->gw[3] ^ h->gw[15], h->buckets, h->idle,
+		                 h->busy);
 
 		for (uint16_t j = 0; j < h->n; j++)
 			o += snprintf(s + o, 1024 - o, " %u/%u", h->ids[j], h->weights[j]);
@@ -422,7 +470,7 @@ static char *kernel_text(const struct kernel *k)
 
 		lines[l] = malloc(128);
 		snprintf(lines[l++], 128, "rule f%u p%u prio%u %x/%x t%u", r->family, r->proto,
-			 r->prio, r->mark, r->mask, r->table);
+		         r->prio, r->mark, r->mask, r->table);
 	}
 	qsort(lines, l, sizeof(*lines), cmp_str);
 	for (size_t i = 0; i < l; i++)
@@ -449,6 +497,9 @@ struct tworld {
 	struct config *cfg;	/* NULL = empty world */
 	struct ifview ifs[MAXD];
 	bool member_up[MAXG * MAXM];
+	/* as old: links that went down behind sync's back */
+	int down[2 * MAXD];
+	size_t n_down;
 	struct world w;
 };
 
@@ -597,6 +648,19 @@ static void tw_init(struct tworld *t, struct config *c)
 		t->member_up[i] = true;
 }
 
+/*
+ * Link ifindex of old went down after old was installed, and is down in
+ * new: the model flushes it, sync isn't told.
+ */
+static void tw_link_down(struct tworld *t, struct tworld *new, int ifindex)
+{
+	t->down[t->n_down++] = ifindex;
+	for (size_t d = 0; d < MAXD; d++)
+		for (int f = 0; f < 2; f++)
+			if (new->ifs[d].fam[f].ifindex == ifindex)
+				new->ifs[d].fam[f].usable = false;
+}
+
 static const struct world *tw_world(struct tworld *t)
 {
 	t->w = (struct world){ t->cfg, t->ifs, NULL, t->member_up };
@@ -604,18 +668,6 @@ static const struct world *tw_world(struct tworld *t)
 }
 
 /* --- the reference --- */
-
-static uint32_t ref_group_nh(struct tworld *t, size_t g, int f)
-{
-	const struct config *c = t->cfg;
-	const struct cfg_group *grp = &c->groups[g];
-
-	for (size_t m = 0; m < grp->n_members && m < MAX_NH_GROUP; m++)
-		if (t->ifs[grp->members[m].dev].fam[f].usable &&
-		    t->member_up[cfg_member_index(c, g, m)])
-			return cfg_group_nhid(c, g, f);
-	return 0;
-}
 
 static size_t ref_n(const struct config *c, int f)
 {
@@ -636,12 +688,96 @@ static bool ref_find(const struct config *c, int f, const uint8_t *key, uint16_t
 	return false;
 }
 
-static bool recreated(uint32_t id)
+/* Every prefix route points at its group's nexthop, whatever the members. */
+static uint32_t ref_nh(const struct config *c, uint16_t rule, int f)
 {
-	for (size_t i = 0; id && i < n_recreated; i++)
-		if (nh_recreated[i] == id)
+	return cfg_group_nhid(c, c->rule_group[rule], f);
+}
+
+/*
+ * What happens to the nexthops in old -> new, judged from fresh installs
+ * of old (ko) and new (kn).
+ */
+struct fate {
+	uint32_t moved[MAXNH];		/* deleted or emptied during the apply */
+	size_t n_moved;
+	uint32_t redo[MAXNH];		/* those, and groups links may have taken */
+	size_t n_redo;
+};
+
+static bool in(const uint32_t *ids, size_t n, uint32_t id)
+{
+	for (size_t i = 0; i < n; i++)
+		if (ids[i] == id)
 			return true;
 	return false;
+}
+
+static bool m_in(const struct mnh *g, uint32_t id)
+{
+	for (uint16_t j = 0; j < g->n; j++)
+		if (g->ids[j] == id)
+			return true;
+	return false;
+}
+
+/* Member j of old group g is surely still in it: see sync.c. */
+static bool m_kept(const struct kernel *ko, const struct kernel *kn, const struct mnh *g,
+                   uint16_t j)
+{
+	const struct mnh *om = nh_get((struct kernel *)ko, g->ids[j]);
+	const struct mnh *nm = nh_get((struct kernel *)kn, g->ids[j]);
+	const struct mnh *ng = nh_get((struct kernel *)kn, g->id);
+
+	return om && (om->blackhole ||
+	              (nm && ng && ng->group && m_in(ng, g->ids[j]) && nm->oif == om->oif));
+}
+
+static void ref_fate(const struct kernel *ko, const struct kernel *kn, struct fate *fa)
+{
+	memset(fa, 0, sizeof(*fa));
+
+	/* what the kernel can't replace (nor sync, its tag) is deleted, then created anew */
+	for (size_t i = 0; i < ko->nnh; i++) {
+		const struct mnh *n = nh_get((struct kernel *)kn, ko->nh[i].id);
+
+		if (n && (!m_replaceable(&ko->nh[i], n) || n->proto != ko->nh[i].proto))
+			fa->moved[fa->n_moved++] = ko->nh[i].id;
+	}
+	/* groups those deletes empty, with what links may have taken */
+	for (size_t i = 0, n = fa->n_moved; i < ko->nnh; i++) {
+		const struct mnh *g = &ko->nh[i];
+		bool any = false, all = true;
+
+		if (!g->group || in(fa->moved, n, g->id))
+			continue;
+		for (uint16_t j = 0; j < g->n; j++) {
+			if (in(fa->moved, n, g->ids[j]))
+				any = true;
+			else if (m_kept(ko, kn, g, j))
+				all = false;
+		}
+		if (any && all)
+			fa->moved[fa->n_moved++] = g->id;
+	}
+
+	memcpy(fa->redo, fa->moved, fa->n_moved * sizeof(*fa->redo));
+	fa->n_redo = fa->n_moved;
+	/*
+	 * groups that keep none of their members on the same link: the last
+	 * one's link may have gone down, taking the group and its routes
+	 */
+	for (size_t i = 0; i < ko->nnh; i++) {
+		const struct mnh *g = &ko->nh[i], *ng = nh_get((struct kernel *)kn, g->id);
+		bool kept = false;
+
+		if (!g->group || !ng || !ng->group)
+			continue;
+		for (uint16_t j = 0; !kept && j < g->n; j++)
+			kept = m_kept(ko, kn, g, j);
+		if (!kept && !in(fa->redo, fa->n_redo, g->id))
+			fa->redo[fa->n_redo++] = g->id;
+	}
 }
 
 static void ref_push(struct rec *out, size_t *n, char op, const struct config *c, int f,
@@ -662,21 +798,28 @@ static void ref_push(struct rec *out, size_t *n, char op, const struct config *c
 	}
 }
 
-/* The prefix requests of old -> new, given what was re-created. */
-static size_t ref_diff(struct tworld *o, struct tworld *n, struct rec *out)
+/* The prefix requests of old -> new. */
+static size_t ref_diff(struct tworld *o, struct tworld *n, const struct fate *fa, struct rec *out)
 {
 	const struct config *oc = o->cfg, *nc = n->cfg;
 	bool comparable = oc && nc && oc->table_id == nc->table_id && oc->rt_proto == nc->rt_proto;
 	size_t cnt = 0;
 	uint16_t rule, orule;
 
+	for (int f = 0; oc && f < 2; f++)
+		for (size_t i = 0; i < ref_n(oc, f); i++) {
+			const uint8_t *key = ref_key(oc, f, i, &orule);
+
+			if (in(fa->moved, fa->n_moved, ref_nh(oc, orule, f)))
+				ref_push(out, &cnt, 'S', oc, f, key, 0);
+		}
 	for (int f = 0; nc && f < 2; f++)
 		for (size_t j = 0; j < ref_n(nc, f); j++) {
 			const uint8_t *key = ref_key(nc, f, j, &rule);
-			uint32_t nnh = ref_group_nh(n, nc->rule_group[rule], f);
+			uint32_t nnh = ref_nh(nc, rule, f);
 
 			if (comparable && ref_find(oc, f, key, &orule) &&
-			    ref_group_nh(o, oc->rule_group[orule], f) == nnh && !recreated(nnh))
+			    ref_nh(oc, orule, f) == nnh && !in(fa->redo, fa->n_redo, nnh))
 				continue;
 			ref_push(out, &cnt, 'S', nc, f, key, nnh);
 		}
@@ -701,16 +844,18 @@ static void run(struct kernel *k, struct tworld *o, struct tworld *n, struct syn
 {
 	K = k;
 	nrecs = 0;
-	n_failed = n_noop_set = n_msgs = 0;
-	n_deleted = n_recreated = 0;
+	n_failed = n_noop_set = n_msgs = n_leaks = 0;
+	leak_table = o->cfg ? o->cfg->table_id : 0;
+	in_apply = true;
 	sync_apply(&nl, tw_world(o), tw_world(n), st);
+	in_apply = false;
 }
 
 struct result {
 	unsigned set, del, msgs;	/* prefix route requests; all requests */
 };
 
-static struct kernel k1, k2;
+static struct kernel k0, k1, k2;
 static struct rec want[2 * MAXR];
 
 /* All the checks for old -> new; returns what was sent. */
@@ -719,6 +864,7 @@ static struct result check_pair(const char *name, struct tworld *o, struct tworl
 	struct sync_stats st;
 	struct result res = {};
 	struct tworld empty;
+	struct fate fa;
 	char *a, *b;
 	size_t nw, got = 0;
 
@@ -733,27 +879,32 @@ static struct result check_pair(const char *name, struct tworld *o, struct tworl
 		for (size_t i = 0; i < ref_n(n->cfg, f); i++) {
 			uint16_t rule;
 			const uint8_t *key = ref_key(n->cfg, f, i, &rule);
-			uint32_t nh = ref_group_nh(n, n->cfg->rule_group[rule], f);
+			uint32_t nh = ref_nh(n->cfg, rule, f);
 			bool found = false;
 
 			for (size_t r = 0; r < k2.nr; r++)
 				if (k2.r[r].table == n->cfg->table_id && k2.r[r].family == (f ? AF_INET6 : AF_INET) &&
 				    !memcmp(k2.r[r].dst, key, f ? 16 : 4) && k2.r[r].plen == key[f ? 16 : 4]) {
-					found = k2.r[r].nh_id == nh &&
-						k2.r[r].type == (nh ? RTN_UNICAST : RTN_BLACKHOLE) &&
-						k2.r[r].proto == n->cfg->rt_proto;
+					found = k2.r[r].nh_id == nh && k2.r[r].type == RTN_UNICAST &&
+					        k2.r[r].proto == n->cfg->rt_proto;
 					break;
 				}
 			CHECK(found, "fresh new: prefix %zu of family %d not rendered right", i, f);
 		}
 
-	/* empty -> old, then old -> new */
+	/* empty -> old, the links go down, then old -> new */
 	memset(&k1, 0, sizeof(k1));
 	run(&k1, &empty, o, &st);
 	CHECK(!n_failed && !st.errors, "fresh old: %u failed requests", n_failed);
+	k0 = k1;
+	for (size_t i = 0; i < o->n_down; i++)
+		link_flush(&k1, o->down[i]);
+	ref_fate(&k0, &k2, &fa);
 	run(&k1, o, n, &st);
 	CHECK(!n_failed && !st.errors, "old -> new: %u failed requests", n_failed);
-	CHECK(!n_noop_set, "old -> new: %u no-op route replaces", n_noop_set);
+	CHECK(!n_noop_set || fa.n_redo > fa.n_moved, "old -> new: %u no-op route replaces",
+	      n_noop_set);
+	CHECK(!n_leaks, "old -> new: %u prefix routes went with their nexthop", n_leaks);
 
 	a = kernel_text(&k1);
 	b = kernel_text(&k2);
@@ -761,7 +912,7 @@ static struct result check_pair(const char *name, struct tworld *o, struct tworl
 	free(a);
 	free(b);
 
-	nw = ref_diff(o, n, want);
+	nw = ref_diff(o, n, &fa, want);
 	for (size_t i = 0; i < nrecs; i++) {
 		if (!is_prefix_rec(&recs[i], o->cfg, n->cfg))
 			continue;
@@ -834,23 +985,63 @@ static void named(void)
 	EXPECT(r, 0, 0);
 	CHECK(r.msgs == 2, "want group replace + member delete, got %u requests", r.msgs);
 
+	/*
+	 * routes stay on the group, which holds the blackhole instead; with
+	 * none of its members left the kernel may have deleted it, so it is
+	 * set again with its routes and default
+	 */
 	b.ifs[0].fam[0].usable = false;
 	r = check_pair("same config, v4 of group 0 blackholed", &a, &b);
 	EXPECT(r, 6, 0);
+	CHECK(r.msgs == 10, "want group replace, default, 6 routes + 2 member deletes, "
+	      "got %u requests", r.msgs);
+	/* back: the blackhole goes with no link, the routes stay */
 	r = check_pair("same config, v4 of group 0 back", &b, &a);
-	EXPECT(r, 6, 0);
+	EXPECT(r, 0, 0);
 
 	tw_init(&b, c);
 	b.member_up[cfg_member_index(c, 1, 0)] = false;
 	r = check_pair("same config, group 1 probed down", &a, &b);
 	EXPECT(r, 5, 0);
+	CHECK(r.msgs == 9, "want 2 group replaces, 2 defaults, 5 routes, got %u requests", r.msgs);
 
-	/* reload: group 0's buckets change, it is re-created with its routes */
+	/*
+	 * group 1's only link goes down: the kernel took the group and its
+	 * routes, the group is back as the blackhole with them
+	 */
+	tw_init(&b, c);
+	tw_link_down(&a, &b, 3);
+	r = check_pair("same config, group 1's link went down", &a, &b);
+	EXPECT(r, 5, 0);
+	/* one of group 0's links: no route goes, none is set */
+	tw_init(&a, c);
+	tw_init(&b, c);
+	tw_link_down(&a, &b, 1);
+	r = check_pair("same config, one of group 0's links went down", &a, &b);
+	EXPECT(r, 0, 0);
+	tw_init(&a, c);
+
+	/*
+	 * reload: group 0's buckets change: its routes become blackholes, it
+	 * is re-created, its routes point at it again
+	 */
 	c2 = cfg_dup(c);
 	c2->groups[0].buckets = 32;
 	tw_init(&b, c2);
 	r = check_pair("reload, buckets changed", &a, &b);
-	EXPECT(r, 9, 0);
+	EXPECT(r, 18, 0);
+	/* ... while both its links went down */
+	tw_link_down(&a, &b, 1);
+	tw_link_down(&a, &b, 2);
+	r = check_pair("reload, buckets changed, links went down", &a, &b);
+	EXPECT(r, 18, 0);
+	tw_init(&a, c);
+	/* ... while it is blackholed */
+	a.ifs[0].fam[0].usable = a.ifs[1].fam[0].usable = false;
+	b.ifs[0].fam[0].usable = false;
+	r = check_pair("reload, buckets changed, blackholed", &a, &b);
+	EXPECT(r, 18, 0);
+	tw_init(&a, c);
 	cfg_free(c2, false);
 
 	/* reload: rule 1 moves to group 0 */
@@ -904,7 +1095,7 @@ static void named(void)
 	c2->table_id = c->table_id;
 	c2->rt_proto = 234;
 	r = check_pair("reload, rt_proto changed", &a, &b);
-	EXPECT(r, 16, 16);
+	EXPECT(r, 32, 16);
 	cfg_free(c2, false);
 
 	r = check_pair("old world empty", &e, &a);
@@ -937,7 +1128,7 @@ static struct config *random_cfg(void)
 
 	c->table_id = rnd(4) ? 100 : 5000;
 	c->rt_proto = rnd(6) ? 233 : 234;
-	c->nexthop_id = rnd(6) ? 1000 : 1004;
+	c->nexthop_id = rnd(6) ? 1000 : rnd(2) ? 1004 : 1002;
 	for (unsigned g = 0; g < ng; g++) {
 		unsigned nm = 1 + rnd(MAXM < nd ? MAXM : nd), first = rnd(nd);
 
@@ -984,6 +1175,16 @@ static void random_state(struct tworld *t)
 		}
 	for (size_t i = 0; i < MAXG * MAXM; i++)
 		t->member_up[i] = rnd(5);
+}
+
+/* Some of t's links go down, and are down in new. */
+static void random_downs(struct tworld *t, struct tworld *new)
+{
+	if (rnd(3))
+		return;
+	for (int ifindex = 1; ifindex <= MAXD + 10; ifindex++)
+		if (!rnd(3))
+			tw_link_down(t, new, ifindex);
 }
 
 /* A reload's worth of change, keeping most of it. */
@@ -1069,6 +1270,7 @@ static void random_pairs(unsigned n)
 		random_state(&b);
 		if (rnd(3))	/* mostly small changes */
 			memcpy(b.ifs, a.ifs, sizeof(a.ifs));
+		random_downs(&a, &b);
 		snprintf(name, sizeof(name), "random pair %u", i);
 		check_pair(name, &a, &b);
 		cfg_free(c2, shared);
@@ -1084,7 +1286,7 @@ int main(void)
 		return 2;
 	named();
 	if (!fails)
-		random_pairs(3000);
+		random_pairs(5000);
 	nl_close(&nl);
 	if (fails) {
 		fprintf(stderr, "test_sync: %u checks failed\n", fails);

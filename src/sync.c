@@ -11,6 +11,9 @@
 
 static const int families[2] = { AF_INET, AF_INET6 };
 
+/* the highest metric there is, v4 and v6: behind any other route */
+#define METRIC_LAST UINT32_MAX
+
 /* --- rendering --- */
 
 size_t cfg_member_index(const struct config *c, size_t g, size_t m)
@@ -51,14 +54,36 @@ static bool dev_member(const struct config *c, size_t d, bool probed)
 	return false;
 }
 
-/* Everything one world renders to, except the prefix routes. */
+/* Nexthop ids; the caller makes room. */
+struct idset {
+	uint32_t *ids;
+	size_t n;
+};
+
+static bool idset_has(const struct idset *s, uint32_t id)
+{
+	for (size_t i = 0; id && i < s->n; i++)
+		if (s->ids[i] == id)
+			return true;
+	return false;
+}
+
+static void idset_add(struct idset *s, uint32_t id)
+{
+	if (!idset_has(s, id))
+		s->ids[s->n++] = id;
+}
+
+/*
+ * Everything one world renders to, except the prefix routes: those depend
+ * on the config alone, each points at its group's nexthop for good.
+ */
 struct plan {
-	struct nexthop_spec *members;	/* device nexthops */
+	struct nexthop_spec *members;	/* the blackholes, device nexthops */
 	size_t n_members;
-	struct nexthop_spec *groups;	/* resilient groups */
+	struct nexthop_spec *groups;	/* resilient groups, every group and family */
 	size_t n_groups;
-	uint32_t *group_nh;		/* [2 * g + f]: group nexthop id, 0 = blackhole */
-	struct route_spec *small;	/* group defaults and the probe table */
+	struct route_spec *small;	/* group table defaults and the probe table */
 	size_t n_small;
 	struct rule_spec *rules;
 	size_t n_rules;
@@ -67,6 +92,15 @@ struct plan {
 static void gen_members(const struct world *w, struct plan *p)
 {
 	const struct config *c = w->cfg;
+
+	/* what a group holds while none of its members is usable */
+	for (int f = 0; f < 2 && c->n_groups; f++)
+		p->members[p->n_members++] = (struct nexthop_spec){
+			.id = cfg_blackhole_nhid(c, f),
+			.family = families[f],
+			.proto = c->rt_proto,
+			.blackhole = true,
+		};
 
 	for (size_t d = 0; d < c->n_devices; d++) {
 		if (!dev_member(c, d, false))
@@ -89,6 +123,10 @@ static void gen_members(const struct world *w, struct plan *p)
 	}
 }
 
+/*
+ * Every group exists, per family, with its usable members or else the
+ * blackhole: its routes never change for its members' sake.
+ */
 static void gen_groups(const struct world *w, struct plan *p)
 {
 	const struct config *c = w->cfg;
@@ -97,7 +135,7 @@ static void gen_groups(const struct world *w, struct plan *p)
 		const struct cfg_group *grp = &c->groups[g];
 
 		for (int f = 0; f < 2; f++) {
-			struct nexthop_spec *n = &p->groups[p->n_groups];
+			struct nexthop_spec *n = &p->groups[p->n_groups++];
 
 			for (size_t m = 0; m < grp->n_members && n->n_grp < MAX_NH_GROUP; m++) {
 				if (!world_member_usable(w, g, m, f))
@@ -107,7 +145,7 @@ static void gen_groups(const struct world *w, struct plan *p)
 				n->n_grp++;
 			}
 			if (!n->n_grp)
-				continue;
+				n->grp[n->n_grp++] = (struct nh_grp_entry){ cfg_blackhole_nhid(c, f), 1 };
 
 			n->id = cfg_group_nhid(c, g, f);
 			n->family = families[f];	/* bookkeeping, sent as AF_UNSPEC */
@@ -115,17 +153,8 @@ static void gen_groups(const struct world *w, struct plan *p)
 			n->buckets = grp->buckets;
 			n->timer_idle = grp->timer_idle;
 			n->timer_busy = grp->timer_busy;
-			p->group_nh[2 * g + f] = n->id;
-			p->n_groups++;
 		}
 	}
-}
-
-/* Unicast via the group's nexthop if it has one, blackhole otherwise. */
-static void render(struct route_spec *r, const struct plan *p, size_t g, int f)
-{
-	r->nh_id = p->group_nh[2 * g + f];
-	r->type = r->nh_id ? RTN_UNICAST : RTN_BLACKHOLE;
 }
 
 static void gen_small(const struct world *w, struct plan *p)
@@ -136,12 +165,21 @@ static void gen_small(const struct world *w, struct plan *p)
 		if (!c->groups[g].fwmark)
 			continue;
 		for (int f = 0; f < 2; f++) {
-			struct route_spec *r = &p->small[p->n_small++];
-
-			r->family = families[f];
-			r->table = cfg_group_table(c, g);
-			r->proto = c->rt_proto;
-			render(r, p, g, f);
+			p->small[p->n_small++] = (struct route_spec){
+				.family = families[f],
+				.type = RTN_UNICAST,
+				.proto = c->rt_proto,
+				.table = cfg_group_table(c, g),
+				.nh_id = cfg_group_nhid(c, g, f),
+			};
+			/* should the kernel delete the group: drop, don't fall through */
+			p->small[p->n_small++] = (struct route_spec){
+				.family = families[f],
+				.type = RTN_BLACKHOLE,
+				.proto = c->rt_proto,
+				.table = cfg_group_table(c, g),
+				.metric = METRIC_LAST,
+			};
 		}
 	}
 
@@ -213,7 +251,6 @@ static void plan_free(struct plan *p)
 {
 	free(p->members);
 	free(p->groups);
-	free(p->group_nh);
 	free(p->small);
 	free(p->rules);
 	memset(p, 0, sizeof(*p));
@@ -225,12 +262,11 @@ static int plan_build(const struct world *w, struct plan *p)
 	size_t nd = c ? c->n_devices : 0, ng = c ? c->n_groups : 0;
 
 	memset(p, 0, sizeof(*p));
-	p->members = calloc(2 * nd + 1, sizeof(*p->members));
+	p->members = calloc(2 * nd + 3, sizeof(*p->members));
 	p->groups = calloc(2 * ng + 1, sizeof(*p->groups));
-	p->group_nh = calloc(2 * ng + 1, sizeof(*p->group_nh));
-	p->small = calloc(2 * (ng + nd) + 1, sizeof(*p->small));
+	p->small = calloc(2 * (2 * ng + nd) + 1, sizeof(*p->small));
 	p->rules = calloc(2 * (ng + 2), sizeof(*p->rules));
-	if (!p->members || !p->groups || !p->group_nh || !p->small || !p->rules) {
+	if (!p->members || !p->groups || !p->small || !p->rules) {
 		plan_free(p);
 		return -1;
 	}
@@ -265,11 +301,15 @@ static const void *prefixes_of(const struct config *c, int f)
 	return f ? (const void *)c->p6 : (const void *)c->p4;
 }
 
-/* The one place a prefix route is built: entry i of w's family f list. */
-static void prefix_route(const struct world *w, const struct plan *p, int f, size_t i,
-                         struct route_spec *r)
+/* The nexthop of rule's group in family f. */
+static uint32_t rule_nh(const struct config *c, uint16_t rule, int f)
 {
-	const struct config *c = w->cfg;
+	return cfg_group_nhid(c, c->rule_group[rule], f);
+}
+
+/* The one place a prefix route is built: entry i of c's family f list. */
+static void prefix_route(const struct config *c, int f, size_t i, struct route_spec *r)
+{
 	const uint8_t *addr;
 	uint16_t rule;
 
@@ -280,15 +320,16 @@ static void prefix_route(const struct world *w, const struct plan *p, int f, siz
 	memcpy(r->dst, addr, f ? 16 : 4);
 	r->table = c->table_id;
 	r->proto = c->rt_proto;
-	render(r, p, c->rule_group[rule], f);
+	r->type = RTN_UNICAST;
+	r->nh_id = rule_nh(c, rule, f);
 }
 
-static void prefix_send(struct nl *nl, enum nl_op op, const struct world *w,
-                        const struct plan *p, int f, size_t i, struct sync_stats *st)
+static void prefix_send(struct nl *nl, enum nl_op op, const struct config *c, int f, size_t i,
+                        struct sync_stats *st)
 {
 	struct route_spec r;
 
-	prefix_route(w, p, f, i, &r);
+	prefix_route(c, f, i, &r);
 	nl_route(nl, op, &r);
 	if (op == NL_DEL)
 		st->route_del++;
@@ -318,9 +359,10 @@ static bool rule_eq(const struct rule_spec *a, const struct rule_spec *b)
 static bool nh_eq(const struct nexthop_spec *a, const struct nexthop_spec *b)
 {
 	if (a->id != b->id || a->family != b->family || a->proto != b->proto ||
-	    a->oif != b->oif || a->has_gw != b->has_gw || memcmp(a->gw, b->gw, sizeof(a->gw)) ||
-	    a->n_grp != b->n_grp || a->buckets != b->buckets ||
-	    a->timer_idle != b->timer_idle || a->timer_busy != b->timer_busy)
+	    a->blackhole != b->blackhole || a->oif != b->oif || a->has_gw != b->has_gw ||
+	    memcmp(a->gw, b->gw, sizeof(a->gw)) || a->n_grp != b->n_grp ||
+	    a->buckets != b->buckets || a->timer_idle != b->timer_idle ||
+	    a->timer_busy != b->timer_busy)
 		return false;
 	for (size_t i = 0; i < a->n_grp; i++)
 		if (a->grp[i].id != b->grp[i].id || a->grp[i].weight != b->grp[i].weight)
@@ -332,36 +374,10 @@ static bool nh_eq(const struct nexthop_spec *a, const struct nexthop_spec *b)
 static bool nh_replaceable(const struct nexthop_spec *a, const struct nexthop_spec *b)
 {
 	return !a->n_grp == !b->n_grp && a->family == b->family && a->proto == b->proto &&
-	       a->buckets == b->buckets;
+	       a->blackhole == b->blackhole && a->buckets == b->buckets;
 }
 
 /* --- diffing --- */
-
-/*
- * Nexthop ids deleted and created anew in this apply. The kernel drops
- * routes using a deleted nexthop and removes it from its groups, so those
- * have to be set again even if their rendering is unchanged.
- */
-struct redo {
-	uint32_t *ids;
-	size_t n;
-};
-
-static bool redo_has(const struct redo *rd, uint32_t id)
-{
-	for (size_t i = 0; id && i < rd->n; i++)
-		if (rd->ids[i] == id)
-			return true;
-	return false;
-}
-
-static bool redo_grp(const struct redo *rd, const struct nexthop_spec *n)
-{
-	for (size_t i = 0; i < n->n_grp; i++)
-		if (redo_has(rd, n->grp[i].id))
-			return true;
-	return false;
-}
 
 static const struct nexthop_spec *nh_find(const struct plan *p, uint32_t id)
 {
@@ -374,20 +390,135 @@ static const struct nexthop_spec *nh_find(const struct plan *p, uint32_t id)
 	return NULL;
 }
 
-/* Set everything in n that old doesn't have identically. */
+static bool grp_has(const struct nexthop_spec *n, uint32_t id)
+{
+	for (size_t i = 0; n && i < n->n_grp; i++)
+		if (n->grp[i].id == id)
+			return true;
+	return false;
+}
+
+/*
+ * Whether member k of old group o is surely still in it in the kernel: a
+ * blackhole goes with no link, and a member new keeps in the group on the
+ * same link wasn't taken by its link going down (down and up again is
+ * main.c's to re-set). Any other may be gone already.
+ */
+static bool member_kept(const struct plan *old, const struct plan *new,
+                        const struct nexthop_spec *o, size_t k)
+{
+	const struct nexthop_spec *om = nh_find(old, o->grp[k].id);
+	const struct nexthop_spec *nm = nh_find(new, o->grp[k].id);
+
+	return om && (om->blackhole ||
+	              (nm && grp_has(nh_find(new, o->id), om->id) && nm->oif == om->oif));
+}
+
+/*
+ * Old nexthops the kernel can't turn into what new has at their id (a
+ * group's bucket count changed, ids moved to another kind or family): the
+ * first n_del of doomed, to be deleted and created anew. Deleting a member
+ * drops it from its groups, and a group left empty goes too, counting the
+ * members its links may have taken: doomed has those groups after the
+ * first n_del.
+ */
+static void find_doomed(const struct plan *old, const struct plan *new, struct idset *doomed,
+                        size_t *n_del)
+{
+	const struct nexthop_spec *lists[2] = { new->members, new->groups };
+	size_t counts[2] = { new->n_members, new->n_groups };
+
+	for (int l = 0; l < 2; l++)
+		for (size_t j = 0; j < counts[l]; j++) {
+			const struct nexthop_spec *o = nh_find(old, lists[l][j].id);
+
+			if (o && !nh_replaceable(o, &lists[l][j]))
+				idset_add(doomed, o->id);
+		}
+	*n_del = doomed->n;
+
+	for (size_t i = 0; i < old->n_groups; i++) {
+		const struct nexthop_spec *o = &old->groups[i];
+		bool any = false, all = true;
+
+		if (idset_has(doomed, o->id))
+			continue;
+		for (size_t k = 0; k < o->n_grp; k++) {
+			if (idset_has(doomed, o->grp[k].id))
+				any = true;
+			else if (member_kept(old, new, o, k))
+				all = false;
+		}
+		if (any && all)
+			idset_add(doomed, o->id);
+	}
+}
+
+/*
+ * What links may have taken: when a member's link goes down the kernel
+ * deletes it, dropping it from its groups, and a group it was the last
+ * member of goes too, with every route on it. Members new has on another
+ * link are set again in their groups, and groups none of whose old members
+ * is still in them, on the same link, are set again with their routes,
+ * gone or not.
+ */
+static void find_taken(const struct plan *old, const struct plan *new, struct idset *rd)
+{
+	for (size_t i = 0; i < old->n_members; i++) {
+		const struct nexthop_spec *nm = nh_find(new, old->members[i].id);
+
+		if (nm && !nm->n_grp && nm->oif != old->members[i].oif)
+			idset_add(rd, nm->id);
+	}
+	for (size_t j = 0; j < new->n_groups; j++) {
+		const struct nexthop_spec *o = nh_find(old, new->groups[j].id);
+		bool kept = false;
+
+		if (!o || !o->n_grp)
+			continue;
+		for (size_t k = 0; !kept && k < o->n_grp; k++)
+			kept = member_kept(old, new, o, k);
+		if (!kept)
+			idset_add(rd, o->id);
+	}
+}
+
+/* Delete the first n of doomed: groups first, deleting members empties some. */
+static void nexthops_del_doomed(struct nl *nl, const struct plan *old, const struct idset *doomed,
+                                size_t n, struct sync_stats *st)
+{
+	for (int groups = 1; groups >= 0; groups--)
+		for (size_t i = 0; i < n; i++) {
+			const struct nexthop_spec *o = nh_find(old, doomed->ids[i]);
+
+			if (!!o->n_grp == groups) {
+				nl_nexthop(nl, NL_DEL, o);
+				st->nh_del++;
+			}
+		}
+}
+
+static bool redo_grp(const struct idset *rd, const struct nexthop_spec *n)
+{
+	for (size_t i = 0; i < n->n_grp; i++)
+		if (idset_has(rd, n->grp[i].id))
+			return true;
+	return false;
+}
+
+/*
+ * Set everything in n that old doesn't have identically, or that is in rd:
+ * deleted (or maybe deleted) by the kernel, before or during this apply,
+ * or a group with such a member, which the kernel dropped from it.
+ */
 static void nexthops_set(struct nl *nl, const struct plan *old, const struct nexthop_spec *n,
-                         size_t nn, struct redo *rd, struct sync_stats *st)
+                         size_t nn, const struct idset *rd, struct sync_stats *st)
 {
 	for (size_t j = 0; j < nn; j++) {
 		const struct nexthop_spec *o = nh_find(old, n[j].id);
 
-		if (o && nh_eq(o, &n[j]) && !redo_grp(rd, &n[j]))
+		if (o && nh_eq(o, &n[j]) && !idset_has(rd, n[j].id) && !redo_grp(rd, &n[j]))
 			continue;
-		if (o && !nh_replaceable(o, &n[j])) {
-			nl_nexthop(nl, NL_DEL, o);
-			st->nh_del++;
-			rd->ids[rd->n++] = o->id;
-		}
 		nl_nexthop(nl, NL_SET, &n[j]);
 		st->nh_set++;
 	}
@@ -405,19 +536,22 @@ static void nexthops_del(struct nl *nl, const struct nexthop_spec *o, size_t no,
 	}
 }
 
-/* Set everything in new that old doesn't have identically. */
-static void small_routes_set(struct nl *nl, const struct route_spec *o, size_t no,
-                             const struct route_spec *n, size_t nn, const struct redo *rd,
-                             struct sync_stats *st)
+/*
+ * Set everything in new that old doesn't have identically, or that went
+ * (or may have) with its nexthop.
+ */
+static void small_routes_set(struct nl *nl, const struct plan *old, const struct plan *new,
+                             const struct idset *rd, struct sync_stats *st)
 {
-	for (size_t j = 0; j < nn; j++) {
+	for (size_t j = 0; j < new->n_small; j++) {
+		const struct route_spec *n = &new->small[j];
 		size_t i;
 
-		for (i = 0; i < no; i++)
-			if (route_eq(&o[i], &n[j]))
+		for (i = 0; i < old->n_small; i++)
+			if (route_eq(&old->small[i], n))
 				break;
-		if (i == no || redo_has(rd, n[j].nh_id)) {
-			nl_route(nl, NL_SET, &n[j]);
+		if (i == old->n_small || idset_has(rd, n->nh_id)) {
+			nl_route(nl, NL_SET, n);
 			st->route_set++;
 		}
 	}
@@ -480,30 +614,66 @@ static bool prefixes_shared(const struct world *old, const struct world *new, in
 	       prefixes_n(oc, f) == prefixes_n(nc, f) && oc->n_rules == nc->n_rules;
 }
 
+/* Whether any rule of c maps to a group in ids, in family f. */
+static bool rules_on(const struct config *c, int f, const struct idset *ids)
+{
+	for (size_t r = 0; r < c->n_rules; r++)
+		if (idset_has(ids, rule_nh(c, r, f)))
+			return true;
+	return false;
+}
+
+/*
+ * Before the doomed groups go, taking their routes along: those become
+ * plain blackholes, so that nothing falls through to the next rule until
+ * they point at their group again. The group tables' defaults needn't, the
+ * blackhole behind them catches the traffic.
+ */
+static void prefixes_detach(struct nl *nl, const struct world *old, const struct idset *doomed,
+                            struct sync_stats *st)
+{
+	const struct config *oc = old->cfg;
+
+	for (int f = 0; oc && doomed->n && f < 2; f++) {
+		if (!rules_on(oc, f, doomed))
+			continue;
+		for (size_t i = 0; i < prefixes_n(oc, f); i++) {
+			struct route_spec r;
+
+			prefix_route(oc, f, i, &r);
+			if (!idset_has(doomed, r.nh_id))
+				continue;
+			r.type = RTN_BLACKHOLE;
+			r.nh_id = 0;
+			nl_route(nl, NL_SET, &r);
+			st->route_set++;
+		}
+	}
+}
+
 /* One family's prefixes, old and new, as prefix_changed() sees them. */
 struct prefix_diff {
 	const struct config *oc, *nc;
-	const struct plan *opl, *npl;
-	const struct redo *rd;
+	const struct idset *rd;
 	int f;
 };
 
 /*
- * A prefix route depends on nothing but its group's nexthop (0 = blackhole),
- * given comparable table and tag: it changed if that nexthop id did, or if
- * the nexthop was deleted and created anew, taking the route with it.
+ * A prefix route depends on nothing but its group's nexthop, given
+ * comparable table and tag: it changed if that nexthop id did, or if the
+ * nexthop was deleted (or may have been) and created anew, taking the route
+ * with it.
  */
 static bool prefix_changed(const struct prefix_diff *d, uint16_t orule, uint16_t nrule)
 {
-	uint32_t onh = d->opl->group_nh[2 * d->oc->rule_group[orule] + d->f];
-	uint32_t nnh = d->npl->group_nh[2 * d->nc->rule_group[nrule] + d->f];
+	uint32_t nnh = rule_nh(d->nc, nrule, d->f);
 
-	return onh != nnh || redo_has(d->rd, nnh);
+	return rule_nh(d->oc, orule, d->f) != nnh || idset_has(d->rd, nnh);
 }
 
 /* Shared lists: set what changed, after checking per rule whether anything did. */
 static void prefixes_set_shared(struct nl *nl, const struct prefix_diff *d,
-                                const struct world *new, struct sync_stats *st)
+                                struct sync_stats *st)
 {
 	size_t r, n = prefixes_n(d->nc, d->f);
 	uint16_t rule;
@@ -517,7 +687,7 @@ static void prefixes_set_shared(struct nl *nl, const struct prefix_diff *d,
 	for (size_t i = 0; i < n; i++) {
 		prefix_at(d->nc, d->f, i, &rule);
 		if (prefix_changed(d, rule, rule))
-			prefix_send(nl, NL_SET, new, d->npl, d->f, i, st);
+			prefix_send(nl, NL_SET, d->nc, d->f, i, st);
 	}
 }
 
@@ -528,9 +698,8 @@ static int prefix_cmp(const struct config *a, size_t i, const struct config *b, 
 	return memcmp(prefix_at(a, f, i, ra), prefix_at(b, f, j, rb), f ? 17 : 5);
 }
 
-static void prefixes_set(struct nl *nl, const struct world *old, const struct plan *opl,
-                         const struct world *new, const struct plan *npl,
-                         const struct redo *rd, struct sync_stats *st)
+static void prefixes_set(struct nl *nl, const struct world *old, const struct world *new,
+                         const struct idset *rd, struct sync_stats *st)
 {
 	const struct config *oc = old->cfg, *nc = new->cfg;
 	bool comparable = prefixes_comparable(old, new);
@@ -540,13 +709,13 @@ static void prefixes_set(struct nl *nl, const struct world *old, const struct pl
 
 	/* v4 then v6: the order of one (family, addr, plen) sorted walk */
 	for (int f = 0; f < 2; f++) {
-		struct prefix_diff d = { oc, nc, opl, npl, rd, f };
+		struct prefix_diff d = { oc, nc, rd, f };
 		size_t no = comparable ? prefixes_n(oc, f) : 0, nn = prefixes_n(nc, f);
 		size_t i = 0, j = 0;
 		uint16_t ro = 0, rn = 0;
 
 		if (prefixes_shared(old, new, f)) {
-			prefixes_set_shared(nl, &d, new, st);
+			prefixes_set_shared(nl, &d, st);
 			continue;
 		}
 
@@ -558,15 +727,15 @@ static void prefixes_set(struct nl *nl, const struct world *old, const struct pl
 				continue;
 			}
 			if (cmp > 0 || prefix_changed(&d, ro, rn))
-				prefix_send(nl, NL_SET, new, npl, f, j, st);
+				prefix_send(nl, NL_SET, nc, f, j, st);
 			i += !cmp;
 			j++;
 		}
 	}
 }
 
-static void prefixes_del(struct nl *nl, const struct world *old, const struct plan *opl,
-                         const struct world *new, struct sync_stats *st)
+static void prefixes_del(struct nl *nl, const struct world *old, const struct world *new,
+                         struct sync_stats *st)
 {
 	const struct config *oc = old->cfg, *nc = new->cfg;
 	bool comparable = prefixes_comparable(old, new);
@@ -586,7 +755,7 @@ static void prefixes_del(struct nl *nl, const struct world *old, const struct pl
 			int cmp = j < nn ? prefix_cmp(oc, i, nc, j, f, &ro, &rn) : -1;
 
 			if (cmp < 0)
-				prefix_send(nl, NL_DEL, old, opl, f, i, st);
+				prefix_send(nl, NL_DEL, oc, f, i, st);
 			i += cmp <= 0;
 			j += cmp >= 0;
 		}
@@ -597,7 +766,8 @@ void sync_apply(struct nl *nl, const struct world *old, const struct world *new,
 		struct sync_stats *st)
 {
 	struct plan po, pn;
-	struct redo rd = {};
+	struct idset rd = {}, doomed = {};
+	size_t n_del;
 
 	memset(st, 0, sizeof(*st));
 
@@ -612,33 +782,44 @@ void sync_apply(struct nl *nl, const struct world *old, const struct world *new,
 		plan_free(&po);
 		return;
 	}
+	doomed.ids = calloc(po.n_members + po.n_groups + 1, sizeof(*doomed.ids));
 	rd.ids = calloc(po.n_members + po.n_groups + 1, sizeof(*rd.ids));
-	if (!rd.ids) {
+	if (!doomed.ids || !rd.ids) {
 		err("out of memory");
 		st->errors++;
 		goto out;
 	}
 
+	/* what goes, or may have gone, has to be set again */
+	find_doomed(&po, &pn, &doomed, &n_del);
+	for (size_t i = 0; i < doomed.n; i++)
+		idset_add(&rd, doomed.ids[i]);
+	find_taken(&po, &pn, &rd);
+
 	nl_batch_begin(nl);
 
 	/*
-	 * make before break: nexthops bottom up, fill tables, then point rules
-	 * at them, then clean up top down
+	 * make before break: routes off what can't be replaced, nexthops
+	 * bottom up, fill tables, then point rules at them, then clean up
+	 * top down
 	 */
+	prefixes_detach(nl, old, &doomed, st);
+	nexthops_del_doomed(nl, &po, &doomed, n_del, st);
 	nexthops_set(nl, &po, pn.members, pn.n_members, &rd, st);
 	nexthops_set(nl, &po, pn.groups, pn.n_groups, &rd, st);
-	small_routes_set(nl, po.small, po.n_small, pn.small, pn.n_small, &rd, st);
-	prefixes_set(nl, old, &po, new, &pn, &rd, st);
+	small_routes_set(nl, &po, &pn, &rd, st);
+	prefixes_set(nl, old, new, &rd, st);
 	rules_diff(nl, NL_SET, pn.rules, pn.n_rules, po.rules, po.n_rules, &st->rule_add);
 	rules_diff(nl, NL_DEL, po.rules, po.n_rules, pn.rules, pn.n_rules, &st->rule_del);
 	small_routes_del(nl, po.small, po.n_small, pn.small, pn.n_small, st);
-	prefixes_del(nl, old, &po, new, st);
+	prefixes_del(nl, old, new, st);
 	nexthops_del(nl, po.groups, po.n_groups, &pn, st);
 	nexthops_del(nl, po.members, po.n_members, &pn, st);
 
 	st->errors = nl_batch_end(nl);
 
 out:
+	free(doomed.ids);
 	free(rd.ids);
 	plan_free(&po);
 	plan_free(&pn);
@@ -872,9 +1053,10 @@ static int flush_routes(struct nl *nl, struct flush_ctx *fc, size_t *n_removed,
 /*
  * Rules first, then the groups: the kernel deletes every route on a deleted
  * nexthop by itself, which is nearly all of them, much faster than route
- * by route. What's left are blackholes and the probe routes, deleted in
- * chunks so memory stays bounded however many there are. Then the members,
- * no longer in any group, and any route still on them.
+ * by route. What's left are the group tables' blackholes and the probe
+ * routes, deleted in chunks so memory stays bounded however many there
+ * are. Then the members and blackhole nexthops, no longer in any group,
+ * and any route still on them.
  */
 int sync_flush(struct nl *nl, uint8_t proto)
 {
@@ -968,7 +1150,7 @@ static int nhid_cb(const struct nlmsghdr *nlh, void *data)
 	if (!t.tb[NHA_ID])
 		return MNL_CB_OK;
 	id = mnl_attr_get_u32(t.tb[NHA_ID]);
-	if (id > nc->cfg->nexthop_id && id <= cfg_nhid_end(nc->cfg)) {
+	if (id >= cfg_nhid_start(nc->cfg) && id <= cfg_nhid_end(nc->cfg)) {
 		nc->id = id;
 		nc->proto = nhm->nh_protocol;
 	}
@@ -994,7 +1176,7 @@ int sync_check_nhids(struct nl *nl, const struct config *cfg)
 	if (nc.id) {
 		err("nexthop id %u has proto %u, not %u: nexthop_id range %u..%llu "
 		    "must be routebot's alone", nc.id, nc.proto, cfg->rt_proto,
-		    cfg->nexthop_id + 1, (unsigned long long)cfg_nhid_end(cfg));
+		    cfg_nhid_start(cfg), (unsigned long long)cfg_nhid_end(cfg));
 		return -1;
 	}
 	return 0;

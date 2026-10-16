@@ -99,10 +99,11 @@ foreign
 
 echo "== exit flush: routebot's own state goes"
 has "default nhid 10003 dev vpn0 proto 233" ip route show table 10002
-# what the exit flush has to delete one by one: routes not on a group (none)
+# what the exit flush has to delete one by one: routes not on a group,
+# the blackholes behind the group table's defaults
 mark
 stop
-grep -qF "flush: removed 4 rules, 4 nexthops and the routes on them, 0 other routes with proto 233" "$LOG" &&
+grep -qF "flush: removed 4 rules, 6 nexthops and the routes on them, 2 other routes with proto 233" "$LOG" &&
 	pass "exit flush counted" || fail "exit flush miscounted: $(grep 'flush:' "$LOG" | tail -n 1)"
 not_logged "left"
 empty kstate
