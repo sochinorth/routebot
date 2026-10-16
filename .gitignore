@@ -2,3 +2,4 @@
 .hostdeps/
 build/
 .claude/worktrees/
+build-*/

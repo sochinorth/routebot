@@ -3,79 +3,9 @@
 # usage: tests/netns.sh path/to/routebot
 set -eu
 
-if [ -z "${RB_IN_NS:-}" ]; then
-	exec unshare -rn env RB_IN_NS=1 sh "$0" "$@"
-fi
+. "$(dirname "$0")/lib.sh"
 
 RB=$(realpath "$1")
-T=$(mktemp -d)
-LOG=$T/log
-: > "$LOG"
-PID=
-FAILS=0
-
-cleanup() {
-	[ -n "$PID" ] && kill "$PID" 2>/dev/null || true
-	rm -rf "$T"
-}
-trap cleanup EXIT
-
-pass() { echo "ok   $*"; }
-fail() { echo "FAIL $*"; FAILS=$((FAILS + 1)); }
-
-# normalized command output: no trailing spaces
-out() { "$@" 2>&1 | sed 's/[[:space:]]*$//'; }
-
-has() {
-	_line=$1; shift
-	if out "$@" | grep -qxF -- "$_line"; then pass "'$*' has '$_line'"
-	else fail "'$*' lacks '$_line'"; out "$@" | sed 's/^/     | /'; fi
-}
-
-hasnt() {
-	_line=$1; shift
-	if out "$@" | grep -qxF -- "$_line"; then fail "'$*' still has '$_line'"
-	else pass "'$*' lacks '$_line'"; fi
-}
-
-empty() {
-	if [ -z "$(out "$@")" ]; then pass "'$*' is empty"
-	else fail "'$*' not empty"; out "$@" | sed 's/^/     | /'; fi
-}
-
-mark() { MARK=$(wc -l < "$LOG"); }
-
-wait_log() {
-	for _ in $(seq 50); do
-		tail -n +"$((MARK + 1))" "$LOG" | grep -qF -- "$1" && { pass "log: $1"; return 0; }
-		sleep 0.1
-	done
-	fail "log never said: $1"
-	tail -n 20 "$LOG" | sed 's/^/     | /'
-	return 0
-}
-
-start() {
-	mark
-	"$RB" -v -c "$T/config" >> "$LOG" 2>&1 &
-	PID=$!
-	wait_log "running"
-}
-
-stop() {
-	kill -TERM "$PID"
-	wait "$PID" && pass "exit status 0" || fail "exit status $?"
-	PID=
-}
-
-hup() { mark; kill -HUP "$PID"; }
-
-
-# nexthops without the ever-changing unbalanced_time
-nh() { ip nexthop show | sed 's/ unbalanced_time [0-9]*//'; }
-
-# run link changes while routebot is stopped, so it reads them as one batch
-frozen() { kill -STOP "$PID"; "$@"; mark; kill -CONT "$PID"; }
 
 RES="type resilient buckets 1024 idle_timer 120 unbalanced_timer 600 proto 233"
 
