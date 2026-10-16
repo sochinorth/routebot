@@ -63,7 +63,7 @@ static int run(const char *path, int e, size_t want4, size_t want6)
 		fail_at = n;
 		n_calls = 0;
 		failed = false;
-		c = config_load(path);
+		c = config_load(path, NULL);
 		if (!failed) {
 			config_free(c);
 			break;
@@ -116,7 +116,7 @@ int main(void)
 	if (fclose(f))
 		die(path);
 
-	c = config_load(path);
+	c = config_load(path, NULL);
 	if (!c) {
 		fprintf(stderr, "test_config_eio: config doesn't load\n");
 		return 1;

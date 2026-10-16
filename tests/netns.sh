@@ -417,7 +417,9 @@ goes "table 10000" 1.0.0.1
 goes "table 10002" 7.7.7.7 mark 0x12000000
 same_as_fresh "vpn0 flap unseen by a reload adding a member"
 write_config
+# only a group's members change: the lists aren't read again
 hup; wait_log "sync (reload): 0 routes set, 0 deleted, 2 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+wait_log "lists unchanged, reused"
 
 echo "== all pool members' links down -> pool back as the blackhole"
 kill -STOP "$PID"
@@ -489,14 +491,17 @@ if [ "$(nh | grep -c 'proto 233')" = 14 ]; then pass "14 nexthops"; else fail "n
 same_as_fresh "probed group removed"
 
 echo "== reload: list diff"
+# rewritten in place to the same size: its times tell
 printf '1.1.1.0/24\n4.4.4.0/24\n' > "$T/lists/b.lst"
 hup; wait_log "1 routes set, 1 deleted, 0 nexthops set, 0 deleted, 0 rules added, 0 deleted"
+not_logged "lists unchanged"
 has "4.4.4.0/24 nhid 10004 dev vpn0 proto 233" ip route show table 10000
 hasnt "8.8.8.0/24 nhid 10004 dev vpn0 proto 233" ip route show table 10000
 same_as_fresh "list diff"
 
 echo "== reload: no-op"
-hup; wait_log "sync (reload): nothing to do"
+hup; wait_log "lists unchanged, reused"
+wait_log "sync (reload): nothing to do"
 same_as_fresh "no-op reload"
 
 echo "== reload: pool's buckets change -> re-created, its traffic dropped meanwhile, never via main"

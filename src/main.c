@@ -430,7 +430,7 @@ static void reload(void)
 	struct config *cfg;
 
 	info("reloading %s", rb.cfg_path);
-	cfg = config_load(rb.cfg_path);
+	cfg = config_load(rb.cfg_path, rb.cfg);
 	if (!cfg) {
 		err("reload failed, keeping the old config");
 		return;
@@ -571,7 +571,7 @@ int main(int argc, char **argv)
 
 	{
 		struct snap next[2] = { 0 };
-		struct config *cfg = config_load(rb.cfg_path);
+		struct config *cfg = config_load(rb.cfg_path, NULL);
 
 		if (!cfg)
 			return 1;

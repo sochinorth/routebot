@@ -80,7 +80,7 @@ int main(void)
 	if (fclose(f))
 		die(path);
 
-	c = config_load(path);
+	c = config_load(path, NULL);
 	if (!c) {
 		fprintf(stderr, "test_config_oom: config doesn't load\n");
 		return 1;
@@ -93,7 +93,7 @@ int main(void)
 		fail_at = n;
 		n_calls = 0;
 		failed = false;
-		c = config_load(path);
+		c = config_load(path, NULL);
 		if (!failed) {
 			config_free(c);
 			break;

@@ -53,8 +53,10 @@ struct config {
 
 	/*
 	 * CIDR list entries, sorted by (addr, plen), deduped, exact size.
-	 * prefix.rule indexes rule_group, which gives the group.
+	 * prefix.rule indexes rule_group, which gives the group. lists owns
+	 * them, shared with the configs reloaded while the files didn't change.
 	 */
+	struct cfg_lists *lists;
 	struct prefix4 *p4;
 	size_t n_p4;
 	struct prefix6 *p6;
@@ -139,7 +141,8 @@ static inline size_t config_prefix(const struct config *c, size_t i, char *buf, 
 	return c->rule_group[*rule];
 }
 
-struct config *config_load(const char *path);
+/* prev: the config in use, whose lists are shared if their files are unchanged */
+struct config *config_load(const char *path, const struct config *prev);
 void config_free(struct config *c);
 
 #endif

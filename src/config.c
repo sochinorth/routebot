@@ -5,6 +5,7 @@
 #include <glob.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <uci.h>
@@ -464,36 +465,146 @@ static int load_list_file(const char *path, uint16_t rule, struct prefix_build *
 	return ret;
 }
 
-static int load_cidrset(const char *rule_name, const char *pattern, uint16_t rule,
-                        struct prefix_build *pb)
+/*
+ * The prefix arrays and the files they were read from, shared by the
+ * configs that find the same files. fp has, per rule, every file its
+ * cidrsets match, as path, NUL and file_id; then a NUL. A file rewritten
+ * in place to the same size within one timestamp tick goes unnoticed.
+ */
+struct cfg_lists {
+	unsigned refs;
+	size_t n_dup;		/* for the log */
+	char *fp;		/* NULL: unknown, never matches */
+	size_t fp_len;
+};
+
+struct file_id {
+	uint64_t dev, ino;
+	int64_t size, mtime, mtime_ns, ctime, ctime_ns;
+};
+
+struct fp_build {
+	char *p;
+	size_t n, cap;
+	bool bad;		/* a stat failed, or out of memory */
+};
+
+static void fp_add(struct fp_build *fp, const void *data, size_t len)
 {
-	size_t n_bad = 0, before = pb[0].n + pb[1].n;
+	if (fp->bad)
+		return;
+	if (fp->n + len > fp->cap) {
+		size_t cap = (fp->n + len) * 2;
+		char *np = realloc(fp->p, cap);
+
+		if (!np) {
+			fp->bad = true;
+			return;
+		}
+		fp->p = np;
+		fp->cap = cap;
+	}
+	memcpy(fp->p + fp->n, data, len);
+	fp->n += len;
+}
+
+static void fp_add_file(struct fp_build *fp, const char *path)
+{
+	struct file_id id;
+	struct stat st;
+
+	if (stat(path, &st)) {
+		fp->bad = true;
+		return;
+	}
+	id = (struct file_id){
+		.dev = st.st_dev, .ino = st.st_ino, .size = st.st_size,
+		.mtime = st.st_mtim.tv_sec, .mtime_ns = st.st_mtim.tv_nsec,
+		.ctime = st.st_ctim.tv_sec, .ctime_ns = st.st_ctim.tv_nsec,
+	};
+	fp_add(fp, path, strlen(path) + 1);
+	fp_add(fp, &id, sizeof(id));
+}
+
+/* A cidrset's matches, read once the lists turn out to have changed. */
+struct cidrset {
+	const char *rule_name, *pattern;
+	uint16_t rule;
+	bool matched;
 	glob_t g;
+};
+
+static int glob_cidrset(const char *rule_name, const char *pattern, uint16_t rule,
+                        struct cidrset **sets, size_t *n_sets, struct fp_build *fp)
+{
+	struct cidrset *cs = realloc(*sets, (*n_sets + 1) * sizeof(*cs));
 	int r;
 
-	r = glob(pattern, 0, NULL, &g);
-	if (r == GLOB_NOMATCH) {
-		info("rule '%s': cidrset '%s' matches nothing", rule_name, pattern);
+	if (!cs)
+		return -1;
+	*sets = cs;
+	cs += *n_sets;
+	*cs = (struct cidrset){ .rule_name = rule_name, .pattern = pattern, .rule = rule };
+	++*n_sets;
+	if (!pattern)
 		return 0;
-	}
+
+	r = glob(pattern, 0, NULL, &cs->g);
+	if (r == GLOB_NOMATCH)
+		return 0;
 	if (r) {
 		err("rule '%s': glob '%s' failed", rule_name, pattern);
 		return -1;
 	}
+	cs->matched = true;
+	for (size_t i = 0; i < cs->g.gl_pathc; i++)
+		fp_add_file(fp, cs->g.gl_pathv[i]);
+	return 0;
+}
 
-	for (size_t i = 0; i < g.gl_pathc; i++) {
-		if (load_list_file(g.gl_pathv[i], rule, pb, &n_bad)) {
-			globfree(&g);
-			return -1;
-		}
+/* Reads cs into pb; with pb NULL (lists reused), only says what needs no reading. */
+static int load_cidrset(const struct cidrset *cs, struct prefix_build *pb)
+{
+	size_t n_bad = 0, before;
+
+	if (!cs->pattern) {
+		warn("config: rule '%s' has no cidrset", cs->rule_name);
+		return 0;
 	}
-	globfree(&g);
+	if (!cs->matched) {
+		info("rule '%s': cidrset '%s' matches nothing", cs->rule_name, cs->pattern);
+		return 0;
+	}
+	if (!pb)
+		return 0;
+	before = pb[0].n + pb[1].n;
+	for (size_t i = 0; i < cs->g.gl_pathc; i++)
+		if (load_list_file(cs->g.gl_pathv[i], cs->rule, pb, &n_bad))
+			return -1;
 
 	if (n_bad > 10)
-		warn("rule '%s': %zu more problems in '%s'", rule_name, n_bad - 10, pattern);
-	debug("rule '%s': '%s' -> %zu prefixes", rule_name, pattern,
+		warn("rule '%s': %zu more problems in '%s'", cs->rule_name, n_bad - 10,
+		     cs->pattern);
+	debug("rule '%s': '%s' -> %zu prefixes", cs->rule_name, cs->pattern,
 	      pb[0].n + pb[1].n - before);
 	return 0;
+}
+
+/* Shares prev's lists with c if they were read from the files fp found. */
+static bool lists_reuse(struct config *c, const struct config *prev,
+                        const struct fp_build *fp)
+{
+	struct cfg_lists *l = prev ? prev->lists : NULL;
+
+	if (fp->bad || !l || !l->fp || l->fp_len != fp->n || memcmp(l->fp, fp->p, fp->n))
+		return false;
+	l->refs++;
+	c->lists = l;
+	c->p4 = prev->p4;
+	c->n_p4 = prev->n_p4;
+	c->p6 = prev->p6;
+	c->n_p6 = prev->n_p6;
+	return true;
 }
 
 static int validate(struct config *c, const struct nh_defaults *d)
@@ -601,14 +712,16 @@ static int find_group(const struct config *c, const char *name)
 	return -1;
 }
 
-struct config *config_load(const char *path)
+struct config *config_load(const char *path, const struct config *prev)
 {
 	struct uci_context *ctx = NULL;
 	struct uci_package *pkg = NULL;
 	struct uci_element *e;
 	struct prefix_build pb[2];
 	struct conflict_log cl = {};
-	size_t n_raw;
+	struct cidrset *sets = NULL;
+	struct fp_build fp = {};
+	size_t n_raw, n_sets = 0;
 	void *arr;
 	struct nh_defaults defs = {
 		.buckets = DEFAULT_BUCKETS,
@@ -620,7 +733,7 @@ struct config *config_load(const char *path)
 	size_t n_rules = 0, n_globals = 0;
 	struct config *c;
 	FILE *f = NULL;
-	bool ok = false;
+	bool ok = false, reused;
 
 	c = calloc(1, sizeof(*c));
 	if (!c)
@@ -731,46 +844,68 @@ struct config *config_load(const char *path)
 		c->rule_group = rg;
 		rg[n_rules] = idx;
 
+		/* globbed now, read below unless the files are the same as prev's */
 		o = uci_lookup_option(ctx, s, "cidrset");
-		if (!o) {
-			warn("config: rule '%s' has no cidrset", s->e.name);
-		} else if (o->type == UCI_TYPE_STRING) {
-			if (load_cidrset(s->e.name, o->v.string, n_rules, pb))
+		if (!o || o->type == UCI_TYPE_STRING) {
+			if (glob_cidrset(s->e.name, o ? o->v.string : NULL, n_rules, &sets,
+			                 &n_sets, &fp))
 				goto out;
 		} else {
 			uci_foreach_element(&o->v.list, le)
-				if (load_cidrset(s->e.name, le->name, n_rules, pb))
+				if (glob_cidrset(s->e.name, le->name, n_rules, &sets, &n_sets, &fp))
 					goto out;
 		}
+		fp_add(&fp, "", 1);
 		c->n_rules = ++n_rules;
 	}
 
-	group_names = calloc(c->n_groups + 1, sizeof(*group_names));
-	if (!group_names)
-		goto out;
-	for (size_t i = 0; i < c->n_groups; i++)
-		group_names[i] = c->groups[i].name;
+	reused = lists_reuse(c, prev, &fp);
+	if (!reused) {
+		c->lists = calloc(1, sizeof(*c->lists));
+		group_names = calloc(c->n_groups + 1, sizeof(*group_names));
+		if (!c->lists || !group_names)
+			goto out;
+		c->lists->refs = 1;
+		for (size_t i = 0; i < c->n_groups; i++)
+			group_names[i] = c->groups[i].name;
+	}
+	for (size_t i = 0; i < n_sets; i++)
+		if (load_cidrset(&sets[i], reused ? NULL : pb))
+			goto out;
 
-	cl.rule_group = c->rule_group;
-	cl.rule_names = rule_names;
-	cl.group_names = group_names;
-	n_raw = pb[0].n + pb[1].n;
-	c->n_p4 = prefix_build_finish(&pb[0], AF_INET, &arr, &cl);
-	c->p4 = arr;
-	c->n_p6 = prefix_build_finish(&pb[1], AF_INET6, &arr, &cl);
-	c->p6 = arr;
-	if (cl.n > CONFLICT_WARN)
-		warn("%zu more prefixes claimed by several rules, first one wins",
-		     cl.n - CONFLICT_WARN);
+	if (reused) {
+		debug("config: lists unchanged, reused");
+	} else {
+		cl.rule_group = c->rule_group;
+		cl.rule_names = rule_names;
+		cl.group_names = group_names;
+		n_raw = pb[0].n + pb[1].n;
+		c->n_p4 = prefix_build_finish(&pb[0], AF_INET, &arr, &cl);
+		c->p4 = arr;
+		c->n_p6 = prefix_build_finish(&pb[1], AF_INET6, &arr, &cl);
+		c->p6 = arr;
+		if (cl.n > CONFLICT_WARN)
+			warn("%zu more prefixes claimed by several rules, first one wins",
+			     cl.n - CONFLICT_WARN);
+		c->lists->n_dup = n_raw - c->n_p4 - c->n_p6;
+		if (!fp.bad) {
+			c->lists->fp = fp.p;
+			c->lists->fp_len = fp.n;
+			fp.p = NULL;
+		}
+	}
 
 	info("config: %zu groups, %zu devices, %zu rules, %zu prefixes (%zu duplicates dropped)",
-	     c->n_groups, c->n_devices, n_rules, c->n_p4 + c->n_p6,
-	     n_raw - c->n_p4 - c->n_p6);
+	     c->n_groups, c->n_devices, n_rules, c->n_p4 + c->n_p6, c->lists->n_dup);
 	ok = true;
 
 out:
 	prefix_build_free(&pb[0]);
 	prefix_build_free(&pb[1]);
+	for (size_t i = 0; i < n_sets; i++)
+		globfree(&sets[i].g);
+	free(sets);
+	free(fp.p);
 	free(rule_names);
 	free(group_names);
 	if (ctx)
@@ -796,8 +931,14 @@ void config_free(struct config *c)
 	for (size_t i = 0; i < c->n_devices; i++)
 		free(c->devices[i].spec);
 	free(c->devices);
-	free(c->p4);
-	free(c->p6);
+	/* the last config holding the lists frees them */
+	if (!c->lists || !--c->lists->refs) {
+		free(c->p4);
+		free(c->p6);
+		if (c->lists)
+			free(c->lists->fp);
+		free(c->lists);
+	}
 	free(c->rule_group);
 	free(c);
 }

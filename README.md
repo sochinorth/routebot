@@ -275,7 +275,7 @@ routebot [-c config] [-v] [-q]
 
 | Signal | Effect |
 |---|---|
-| `SIGHUP` | Reload the config and list files, and apply only what changed. If the new config is invalid, the old one stays in place. |
+| `SIGHUP` | Reload the config and list files, and apply only what changed. The lists aren't read again while the cidrsets match the same files for the same rules, each with the same inode, size and times. If the new config is invalid, the old one stays in place. |
 | `SIGTERM`, `SIGINT` | Remove everything routebot installed, then exit. |
 
 On OpenWrt use `service routebot start|reload|stop`. Changing the UCI config

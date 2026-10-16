@@ -184,7 +184,7 @@ static void load(const char *cfg)
 	free(b.s);
 
 	snprintf(path, sizeof(path), "%s/routebot.conf", dir);
-	c = config_load(path);
+	c = config_load(path, NULL);
 	if (!c) {
 		outf("-> load failed\n");
 		return;
