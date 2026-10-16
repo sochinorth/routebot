@@ -29,12 +29,14 @@ static inline size_t family_alen(int family)
 /* Orders by (family, addr, plen); the key the kernel table is unique on. */
 int prefix_cmp(const struct prefix *a, const struct prefix *b);
 
+#define CONFLICT_WARN	10
+
 /*
  * Sort and dedupe in place; for duplicate keys the lowest .rule wins.
- * Conflicts between different interfaces are reported via warn().
- * Returns the new length.
+ * Conflicts between different groups are counted in *n_conflicts, the
+ * first CONFLICT_WARN reported via warn(). Returns the new length.
  */
 size_t prefixes_normalize(struct prefix *p, size_t n, const char *const *rule_names,
-                          const char *const *group_names);
+                          const char *const *group_names, size_t *n_conflicts);
 
 #endif

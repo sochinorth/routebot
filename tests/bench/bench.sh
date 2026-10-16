@@ -95,7 +95,10 @@ GOT4=$(ip -4 route show table 10000 | grep -c ' proto 233' || true)
 GOT6=$(ip -6 route show table 10000 | grep -c ' proto 233' || true)
 [ "$GOT4" = "$V4" ] && [ "$GOT6" = "$V6" ] && pass "routes: $GOT4 v4, $GOT6 v6" >> "$CHECKS" ||
 	fail "routes: $GOT4 v4, $GOT6 v6, want $V4 and $V6"
+# the first 10 conflicts are logged one by one, the rest as a count
 _c=$(grep -c "claimed by rule 'big' (pool) and rule 'asn' (warp)" "$LOG" || true)
+_m=$(sed -n 's/.* \([0-9][0-9]*\) more prefixes claimed by several rules.*/\1/p' "$LOG" | head -n 1)
+_c=$((_c + ${_m:-0}))
 [ "$_c" = "$CONFLICTS" ] && pass "conflicts: $_c" >> "$CHECKS" || fail "conflicts: $_c, want $CONFLICTS"
 grep -q "invalid CIDR" "$LOG" && pass "invalid lines warned" >> "$CHECKS" || fail "no invalid line warning"
 grep -q "has host bits set" "$LOG" && pass "host bits warned" >> "$CHECKS" || fail "no host bits warning"

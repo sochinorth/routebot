@@ -568,7 +568,7 @@ struct config *config_load(const char *path)
 	};
 	const char **rule_names = NULL;
 	const char **group_names = NULL;
-	size_t n_rules = 0, n_globals = 0;
+	size_t n_rules = 0, n_globals = 0, n_conflicts = 0;
 	struct config *c;
 	FILE *f = NULL;
 	bool ok = false;
@@ -694,7 +694,10 @@ struct config *config_load(const char *path)
 	for (size_t i = 0; i < c->n_groups; i++)
 		group_names[i] = c->groups[i].name;
 
-	c->n_prefixes = prefixes_normalize(pv.p, pv.n, rule_names, group_names);
+	c->n_prefixes = prefixes_normalize(pv.p, pv.n, rule_names, group_names, &n_conflicts);
+	if (n_conflicts > CONFLICT_WARN)
+		warn("%zu more prefixes claimed by several rules, first one wins",
+		     n_conflicts - CONFLICT_WARN);
 	c->prefixes = pv.p;
 	pv.p = NULL;
 	if (c->n_prefixes && c->n_prefixes < pv.n / 2) {

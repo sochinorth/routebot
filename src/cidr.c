@@ -89,7 +89,7 @@ static int prefix_sort_cmp(const void *pa, const void *pb)
 }
 
 size_t prefixes_normalize(struct prefix *p, size_t n, const char *const *rule_names,
-                          const char *const *group_names)
+                          const char *const *group_names, size_t *n_conflicts)
 {
 	char buf[PREFIX_STRLEN];
 	size_t out = 0;
@@ -103,7 +103,7 @@ size_t prefixes_normalize(struct prefix *p, size_t n, const char *const *rule_na
 		if (out && !prefix_cmp(&p[out - 1], &p[i])) {
 			const struct prefix *win = &p[out - 1];
 
-			if (win->group != p[i].group)
+			if (win->group != p[i].group && (*n_conflicts)++ < CONFLICT_WARN)
 				warn("%s: claimed by rule '%s' (%s) and rule '%s' (%s), first one wins",
 				     prefix_fmt(&p[i], buf),
 				     rule_names[win->rule], group_names[win->group],
