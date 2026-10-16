@@ -20,6 +20,13 @@
 
 int log_level = L_DEBUG;
 
+/* In a UBSan build, undefined behaviour fails the test rather than scrolling by. */
+const char *__ubsan_default_options(void);
+const char *__ubsan_default_options(void)
+{
+	return "halt_on_error=1:print_stacktrace=1";
+}
+
 static char *out;
 static size_t out_len, out_cap;
 static char base[64];		/* the temp dir */

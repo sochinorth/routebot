@@ -51,8 +51,16 @@ struct config {
 	struct cfg_group *groups;
 	size_t n_groups;
 
-	struct prefix *prefixes;	/* sorted, deduped; prefix.group indexes groups */
-	size_t n_prefixes;
+	/*
+	 * CIDR list entries, sorted by (addr, plen), deduped, exact size.
+	 * prefix.rule indexes rule_group, which gives the group.
+	 */
+	struct prefix4 *p4;
+	size_t n_p4;
+	struct prefix6 *p6;
+	size_t n_p6;
+	uint16_t *rule_group;	/* per rule, in config order */
+	size_t n_rules;
 };
 
 static inline uint32_t cfg_probe_table(const struct config *c)
@@ -103,15 +111,21 @@ static inline uint64_t cfg_nhid_end(const struct config *c)
 /* Number of prefixes, and prefix i in walk order (v4 first) for tests. */
 static inline size_t config_n_prefixes(const struct config *c)
 {
-	return c->n_prefixes;
+	return c->n_p4 + c->n_p6;
 }
 
 /* Formats prefix i into buf, sets *rule to its owning rule, returns its group. */
 static inline size_t config_prefix(const struct config *c, size_t i, char *buf, size_t *rule)
 {
-	prefix_fmt(c->prefixes[i].family, c->prefixes[i].addr, c->prefixes[i].plen, buf);
-	*rule = c->prefixes[i].rule;
-	return c->prefixes[i].group;
+	if (i < c->n_p4) {
+		prefix_fmt(AF_INET, c->p4[i].addr, c->p4[i].plen, buf);
+		*rule = c->p4[i].rule;
+	} else {
+		i -= c->n_p4;
+		prefix_fmt(AF_INET6, c->p6[i].addr, c->p6[i].plen, buf);
+		*rule = c->p6[i].rule;
+	}
+	return c->rule_group[*rule];
 }
 
 struct config *config_load(const char *path);

@@ -36,26 +36,6 @@ struct nh_defaults {
 	uint32_t timer_busy;
 };
 
-struct prefix_vec {
-	struct prefix *p;
-	size_t n, cap;
-};
-
-static int prefix_vec_push(struct prefix_vec *v, const struct prefix *p)
-{
-	if (v->n == v->cap) {
-		size_t cap = v->cap ? v->cap * 2 : 1024;
-		struct prefix *np = realloc(v->p, cap * sizeof(*np));
-
-		if (!np)
-			return -1;
-		v->p = np;
-		v->cap = cap;
-	}
-	v->p[v->n++] = *p;
-	return 0;
-}
-
 static int parse_u32(const char *s, uint32_t *out)
 {
 	unsigned long long v;
@@ -383,9 +363,9 @@ static char list_window[LIST_WINDOW];
 
 /* One line of len bytes (with its newline, if any). Returns -1 when out of memory. */
 static int load_line(const char *path, unsigned lineno, const char *s, size_t len,
-                     uint16_t group, uint16_t rule, struct prefix_vec *out, size_t *n_bad)
+                     uint16_t rule, struct prefix_build *pb, size_t *n_bad)
 {
-	struct prefix p = { .group = group, .rule = rule };
+	uint8_t addr[16], plen;
 	const char *e;
 	bool masked;
 	int family;
@@ -403,7 +383,7 @@ static int load_line(const char *path, unsigned lineno, const char *s, size_t le
 	if (s == e)
 		return 0;
 
-	family = cidr_parse(s, e - s, p.addr, &p.plen, &masked);
+	family = cidr_parse(s, e - s, addr, &plen, &masked);
 	if (family < 0) {
 		if ((*n_bad)++ < 10)
 			warn("%s:%u: invalid CIDR '%.*s', skipped", path, lineno, (int)(e - s), s);
@@ -414,14 +394,13 @@ static int load_line(const char *path, unsigned lineno, const char *s, size_t le
 
 		if ((*n_bad)++ < 10)
 			warn("%s:%u: '%.*s' has host bits set, using %s", path, lineno,
-			     (int)(e - s), s, prefix_fmt(family, p.addr, p.plen, buf));
+			     (int)(e - s), s, prefix_fmt(family, addr, plen, buf));
 	}
-	p.family = family;
-	return prefix_vec_push(out, &p);
+	return prefix_build_add(&pb[family == AF_INET6], addr, plen, rule);
 }
 
-static void load_list_file(const char *path, uint16_t group, uint16_t rule,
-                           struct prefix_vec *out, size_t *n_bad)
+static void load_list_file(const char *path, uint16_t rule, struct prefix_build *pb,
+                           size_t *n_bad)
 {
 	size_t have = 0, pos = 0;
 	unsigned lineno = 0;
@@ -463,18 +442,22 @@ static void load_list_file(const char *path, uint16_t group, uint16_t rule,
 			continue;
 		}
 		pos += len;
-		if (load_line(path, ++lineno, line, len, group, rule, out, n_bad)) {
+		if (load_line(path, ++lineno, line, len, rule, pb, n_bad)) {
 			err("out of memory");
 			break;
 		}
 	}
 	close(fd);
+
+	for (int f = 0; f < 2; f++)
+		if (prefix_build_end_run(&pb[f]))
+			err("out of memory");	/* still correct, sorting gets slower */
 }
 
-static int load_cidrset(const char *rule_name, const char *pattern, uint16_t group,
-			uint16_t rule, struct prefix_vec *out)
+static int load_cidrset(const char *rule_name, const char *pattern, uint16_t rule,
+                        struct prefix_build *pb)
 {
-	size_t n_bad = 0, before = out->n;
+	size_t n_bad = 0, before = pb[0].n + pb[1].n;
 	glob_t g;
 	int r;
 
@@ -489,12 +472,13 @@ static int load_cidrset(const char *rule_name, const char *pattern, uint16_t gro
 	}
 
 	for (size_t i = 0; i < g.gl_pathc; i++)
-		load_list_file(g.gl_pathv[i], group, rule, out, &n_bad);
+		load_list_file(g.gl_pathv[i], rule, pb, &n_bad);
 	globfree(&g);
 
 	if (n_bad > 10)
 		warn("rule '%s': %zu more problems in '%s'", rule_name, n_bad - 10, pattern);
-	debug("rule '%s': '%s' -> %zu prefixes", rule_name, pattern, out->n - before);
+	debug("rule '%s': '%s' -> %zu prefixes", rule_name, pattern,
+	      pb[0].n + pb[1].n - before);
 	return 0;
 }
 
@@ -608,7 +592,10 @@ struct config *config_load(const char *path)
 	struct uci_context *ctx = NULL;
 	struct uci_package *pkg = NULL;
 	struct uci_element *e;
-	struct prefix_vec pv = {};
+	struct prefix_build pb[2];
+	struct conflict_log cl = {};
+	size_t n_raw;
+	void *arr;
 	struct nh_defaults defs = {
 		.buckets = DEFAULT_BUCKETS,
 		.timer_idle = DEFAULT_TIMER_IDLE,
@@ -616,7 +603,7 @@ struct config *config_load(const char *path)
 	};
 	const char **rule_names = NULL;
 	const char **group_names = NULL;
-	size_t n_rules = 0, n_globals = 0, n_conflicts = 0;
+	size_t n_rules = 0, n_globals = 0;
 	struct config *c;
 	FILE *f = NULL;
 	bool ok = false;
@@ -631,6 +618,8 @@ struct config *config_load(const char *path)
 	c->rt_proto = DEFAULT_RT_PROTO;
 	c->nexthop_id = DEFAULT_NEXTHOP_ID;
 	c->probe_mark = DEFAULT_PROBE_MARK;
+	prefix_build_init(&pb[0], AF_INET);
+	prefix_build_init(&pb[1], AF_INET6);
 
 	f = fopen(path, "r");
 	if (!f) {
@@ -694,6 +683,7 @@ struct config *config_load(const char *path)
 		struct uci_element *le;
 		const char *group;
 		const char **nr;
+		uint16_t *rg;
 		int idx;
 
 		if (strcmp(s->type, "rule"))
@@ -721,19 +711,24 @@ struct config *config_load(const char *path)
 			goto out;
 		rule_names = nr;
 		rule_names[n_rules] = s->e.name;
+		rg = realloc(c->rule_group, (n_rules + 1) * sizeof(*rg));
+		if (!rg)
+			goto out;
+		c->rule_group = rg;
+		rg[n_rules] = idx;
 
 		o = uci_lookup_option(ctx, s, "cidrset");
 		if (!o) {
 			warn("config: rule '%s' has no cidrset", s->e.name);
 		} else if (o->type == UCI_TYPE_STRING) {
-			if (load_cidrset(s->e.name, o->v.string, idx, n_rules, &pv))
+			if (load_cidrset(s->e.name, o->v.string, n_rules, pb))
 				goto out;
 		} else {
 			uci_foreach_element(&o->v.list, le)
-				if (load_cidrset(s->e.name, le->name, idx, n_rules, &pv))
+				if (load_cidrset(s->e.name, le->name, n_rules, pb))
 					goto out;
 		}
-		n_rules++;
+		c->n_rules = ++n_rules;
 	}
 
 	group_names = calloc(c->n_groups + 1, sizeof(*group_names));
@@ -742,26 +737,26 @@ struct config *config_load(const char *path)
 	for (size_t i = 0; i < c->n_groups; i++)
 		group_names[i] = c->groups[i].name;
 
-	c->n_prefixes = prefixes_normalize(pv.p, pv.n, rule_names, group_names, &n_conflicts);
-	if (n_conflicts > CONFLICT_WARN)
+	cl.rule_group = c->rule_group;
+	cl.rule_names = rule_names;
+	cl.group_names = group_names;
+	n_raw = pb[0].n + pb[1].n;
+	c->n_p4 = prefix_build_finish(&pb[0], AF_INET, &arr, &cl);
+	c->p4 = arr;
+	c->n_p6 = prefix_build_finish(&pb[1], AF_INET6, &arr, &cl);
+	c->p6 = arr;
+	if (cl.n > CONFLICT_WARN)
 		warn("%zu more prefixes claimed by several rules, first one wins",
-		     n_conflicts - CONFLICT_WARN);
-	c->prefixes = pv.p;
-	pv.p = NULL;
-	if (c->n_prefixes && c->n_prefixes < pv.n / 2) {
-		/* lots of dupes, give memory back */
-		struct prefix *np = realloc(c->prefixes, c->n_prefixes * sizeof(*np));
-
-		if (np)
-			c->prefixes = np;
-	}
+		     cl.n - CONFLICT_WARN);
 
 	info("config: %zu groups, %zu devices, %zu rules, %zu prefixes (%zu duplicates dropped)",
-	     c->n_groups, c->n_devices, n_rules, c->n_prefixes, pv.n - c->n_prefixes);
+	     c->n_groups, c->n_devices, n_rules, c->n_p4 + c->n_p6,
+	     n_raw - c->n_p4 - c->n_p6);
 	ok = true;
 
 out:
-	free(pv.p);
+	prefix_build_free(&pb[0]);
+	prefix_build_free(&pb[1]);
 	free(rule_names);
 	free(group_names);
 	if (ctx)
@@ -787,6 +782,8 @@ void config_free(struct config *c)
 	for (size_t i = 0; i < c->n_devices; i++)
 		free(c->devices[i].spec);
 	free(c->devices);
-	free(c->prefixes);
+	free(c->p4);
+	free(c->p6);
+	free(c->rule_group);
 	free(c);
 }

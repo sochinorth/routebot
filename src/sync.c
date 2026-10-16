@@ -244,16 +244,52 @@ static int plan_build(const struct world *w, struct plan *p)
 	return 0;
 }
 
-static void prefix_route(const struct world *w, const struct plan *p, const struct prefix *pf,
+/* Entry i of c's family f list: its address, and its length and rule. */
+static const uint8_t *prefix_at(const struct config *c, int f, size_t i, uint8_t *plen,
+                                uint16_t *rule)
+{
+	if (f) {
+		*plen = c->p6[i].plen;
+		*rule = c->p6[i].rule;
+		return c->p6[i].addr;
+	}
+	*plen = c->p4[i].plen;
+	*rule = c->p4[i].rule;
+	return c->p4[i].addr;
+}
+
+static size_t prefixes_n(const struct config *c, int f)
+{
+	return f ? c->n_p6 : c->n_p4;
+}
+
+/* Orders entry i of a and entry j of b, both family f, by (addr, plen). */
+static int prefix_cmp(const struct config *a, size_t i, const struct config *b, size_t j, int f)
+{
+	uint8_t pa, pb;
+	uint16_t ra, rb;
+	const uint8_t *x = prefix_at(a, f, i, &pa, &ra), *y = prefix_at(b, f, j, &pb, &rb);
+	int r = memcmp(x, y, f ? 16 : 4);
+
+	if (r)
+		return r;
+	return pa == pb ? 0 : pa < pb ? -1 : 1;
+}
+
+static void prefix_route(const struct world *w, const struct plan *p, int f, size_t i,
                          struct route_spec *r)
 {
+	const struct config *c = w->cfg;
+	const uint8_t *addr;
+	uint16_t rule;
+
 	memset(r, 0, sizeof(*r));
-	r->family = pf->family;
-	r->plen = pf->plen;
-	memcpy(r->dst, pf->addr, family_alen(pf->family));
-	r->table = w->cfg->table_id;
-	r->proto = w->cfg->rt_proto;
-	render(r, p, pf->group, fam_idx(pf->family));
+	r->family = families[f];
+	addr = prefix_at(c, f, i, &r->plen, &rule);
+	memcpy(r->dst, addr, f ? 16 : 4);
+	r->table = c->table_id;
+	r->proto = c->rt_proto;
+	render(r, p, c->rule_group[rule], f);
 }
 
 static bool route_key_eq(const struct route_spec *a, const struct route_spec *b)
@@ -431,74 +467,73 @@ static void prefixes_set(struct nl *nl, const struct world *old, const struct pl
                          const struct world *new, const struct plan *npl,
                          const struct redo *rd, struct sync_stats *st)
 {
-	const struct prefix *op = NULL, *np;
-	size_t no = 0, nn, i = 0, j = 0;
+	const struct config *oc = old->cfg, *nc = new->cfg;
+	bool comparable = prefixes_comparable(old, new);
 	struct route_spec ro, rn;
 
-	if (!new->cfg)
+	if (!nc)
 		return;
-	np = new->cfg->prefixes;
-	nn = new->cfg->n_prefixes;
-	if (prefixes_comparable(old, new)) {
-		op = old->cfg->prefixes;
-		no = old->cfg->n_prefixes;
-	}
 
-	while (j < nn) {
-		int cmp = i < no ? prefix_cmp(&op[i], &np[j]) : 1;
+	/* v4 then v6: the order of one (family, addr, plen) sorted walk */
+	for (int f = 0; f < 2; f++) {
+		size_t no = comparable ? prefixes_n(oc, f) : 0, nn = prefixes_n(nc, f);
+		size_t i = 0, j = 0;
 
-		if (cmp < 0) {
-			i++;
-			continue;
-		}
+		while (j < nn) {
+			int cmp = i < no ? prefix_cmp(oc, i, nc, j, f) : 1;
 
-		prefix_route(new, npl, &np[j], &rn);
-		if (cmp == 0) {
-			prefix_route(old, opl, &op[i], &ro);
-			i++;
-			if (route_eq(&ro, &rn) && !redo_has(rd, rn.nh_id)) {
-				j++;
+			if (cmp < 0) {
+				i++;
 				continue;
 			}
+
+			prefix_route(new, npl, f, j, &rn);
+			if (cmp == 0) {
+				prefix_route(old, opl, f, i, &ro);
+				i++;
+				if (route_eq(&ro, &rn) && !redo_has(rd, rn.nh_id)) {
+					j++;
+					continue;
+				}
+			}
+			nl_route(nl, NL_SET, &rn);
+			st->route_set++;
+			j++;
 		}
-		nl_route(nl, NL_SET, &rn);
-		st->route_set++;
-		j++;
 	}
 }
 
 static void prefixes_del(struct nl *nl, const struct world *old, const struct plan *opl,
                          const struct world *new, struct sync_stats *st)
 {
-	const struct prefix *op, *np = NULL;
-	size_t no, nn = 0, i = 0, j = 0;
+	const struct config *oc = old->cfg, *nc = new->cfg;
+	bool comparable = prefixes_comparable(old, new);
 	struct route_spec ro;
 
-	if (!old->cfg)
+	if (!oc)
 		return;
-	op = old->cfg->prefixes;
-	no = old->cfg->n_prefixes;
-	if (prefixes_comparable(old, new)) {
-		np = new->cfg->prefixes;
-		nn = new->cfg->n_prefixes;
-	}
 
-	while (i < no) {
-		int cmp = j < nn ? prefix_cmp(&op[i], &np[j]) : -1;
+	for (int f = 0; f < 2; f++) {
+		size_t no = prefixes_n(oc, f), nn = comparable ? prefixes_n(nc, f) : 0;
+		size_t i = 0, j = 0;
 
-		if (cmp > 0) {
-			j++;
-			continue;
-		}
-		if (cmp == 0) {
+		while (i < no) {
+			int cmp = j < nn ? prefix_cmp(oc, i, nc, j, f) : -1;
+
+			if (cmp > 0) {
+				j++;
+				continue;
+			}
+			if (cmp == 0) {
+				i++;
+				j++;
+				continue;
+			}
+			prefix_route(old, opl, f, i, &ro);
+			nl_route(nl, NL_DEL, &ro);
+			st->route_del++;
 			i++;
-			j++;
-			continue;
 		}
-		prefix_route(old, opl, &op[i], &ro);
-		nl_route(nl, NL_DEL, &ro);
-		st->route_del++;
-		i++;
 	}
 }
 
