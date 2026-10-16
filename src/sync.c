@@ -1245,71 +1245,48 @@ static int find_reset(const struct diff *d)
 	return 0;
 }
 
-/*
- * What prev had installed, want still has, and the kernel lost behind
- * routebot's back: said once per object, and counted.
- */
+static void lost(const struct diff *d, const char *who, const char *what, int f)
+{
+	info("%s: kernel lost its %s %s, restoring", who, fam_name(f), what);
+	d->st->lost++;
+}
+
+/* What prev had installed, want still has, and the kernel lost: said once, counted. */
 static void log_lost(const struct diff *d)
 {
 	const struct plan *pp = d->pp, *pw = d->pw;
 	const struct config *pc = d->pc, *wc = d->wc;
-	struct owner ow;
+	struct owner o;
 
 	if (!pc)
 		return;
+	/* members, then groups: group i of the plan is g = i / 2, f = i % 2 */
+	for (size_t i = 0; i < pw->n_members + pw->n_groups; i++) {
+		size_t g = i - pw->n_members;
+		const struct nexthop_spec *n = g < pw->n_groups ? &pw->groups[g] : &pw->members[i];
 
-	for (size_t i = 0; i < pw->n_members; i++) {
-		const struct nexthop_spec *n = &pw->members[i];
-
-		if (n->blackhole || !plan_nh(pp, n->id) || same_owner(pc, wc, n->id) != 1 ||
-		    k_nh(d, n->id) || !owner_of(wc, n->id, &ow))
-			continue;
-		info("%s: kernel lost its %s nexthop, restoring", ow.name, fam_name(ow.f));
-		d->st->lost++;
+		if (plan_nh(pp, n->id) && same_owner(pc, wc, n->id) == 1 && owner_of(wc, n->id, &o) &&
+		    o.kind != 'b' && (g < pw->n_groups ? pc->table_id == wc->table_id &&
+		                      !witness_ok(d, g / 2, o.f) : !k_nh(d, n->id)))
+			lost(d, o.name, g < pw->n_groups ? "group" : "nexthop", o.f);
 	}
+	for (size_t i = 0; i < pw->n_small; i++) {
+		struct kroute k = { .r = pw->small[i] };	/* as prev had it */
+		size_t dev = k.r.metric - 1;
 
-	for (size_t g = 0; g < wc->n_groups; g++)
-		for (int f = 0; f < 2; f++) {
-			uint32_t id = cfg_group_nhid(wc, g, f);
-
-			if (!plan_nh(pp, id) || same_owner(pc, wc, id) != 1 ||
-			    pc->table_id != wc->table_id || witness_ok(d, g, f))
-				continue;
-			info("%s: kernel lost its %s group, restoring", wc->groups[g].name,
-			     fam_name(f));
+		k.r.proto = pc->rt_proto;
+		if (k.r.table == cfg_probe_table(wc) && !k_has_route(d, &pw->small[i]) &&
+		    dev < pc->n_devices && !strcmp(pc->devices[dev].spec, wc->devices[dev].spec) &&
+		    small_has(pp, &k, route_eq))
+			lost(d, wc->devices[dev].spec, "probe route", k.r.family == AF_INET6);
+	}
+	for (size_t i = 0; i < pw->n_rules; i++)
+		if (!rule_in(d->k->rules, d->k->n_rules, &pw->rules[i]) &&
+		    rule_in(pp->rules, pp->n_rules, &pw->rules[i])) {
+			info("kernel lost the %s rule at %u, restoring",
+			     fam_name(pw->rules[i].family == AF_INET6), pw->rules[i].prio);
 			d->st->lost++;
 		}
-
-	for (size_t i = 0; i < pw->n_small; i++) {
-		const struct route_spec *r = &pw->small[i];
-		size_t dev = r->metric - 1;
-
-		if (r->table != cfg_probe_table(wc) || k_has_route(d, r) || dev >= pc->n_devices ||
-		    strcmp(pc->devices[dev].spec, wc->devices[dev].spec))
-			continue;
-		for (size_t j = 0; j < pp->n_small; j++) {
-			const struct route_spec *o = &pp->small[j];
-
-			if (o->table == r->table && o->metric == r->metric &&
-			    o->family == r->family && o->oif == r->oif &&
-			    o->has_gw == r->has_gw && !memcmp(o->gw, r->gw, sizeof(o->gw))) {
-				info("%s: kernel lost its %s probe route, restoring",
-				     wc->devices[dev].spec, fam_name(r->family == AF_INET6));
-				d->st->lost++;
-				break;
-			}
-		}
-	}
-
-	for (size_t i = 0; i < pw->n_rules; i++) {
-		const struct rule_spec *r = &pw->rules[i];
-
-		if (rule_in(d->k->rules, d->k->n_rules, r) || !rule_in(pp->rules, pp->n_rules, r))
-			continue;
-		info("kernel lost the %s rule at %u, restoring", fam_name(r->family == AF_INET6),
-		     r->prio);
-		d->st->lost++;
-	}
 }
 
 /* Delete the doomed: groups first, deleting members empties some. */
