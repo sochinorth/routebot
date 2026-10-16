@@ -2,11 +2,33 @@
 #define ROUTEBOT_CONFIG_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
-#include "cidr.h"
-
 #define MAX_GROUP_MEMBERS 32
+
+/*
+ * One list entry per family, sorted by (addr, plen): addr and plen are
+ * adjacent, so memcmp over the first alen + 1 bytes is the order. rule is
+ * the owning rule's config index, not its group: the arrays don't depend on
+ * group numbering (config.rule_group maps one to the other).
+ */
+struct prefix4 {
+	uint8_t addr[4];
+	uint8_t plen;
+	uint8_t pad;
+	uint16_t rule;
+};
+
+struct prefix6 {
+	uint8_t addr[16];
+	uint8_t plen;
+	uint8_t pad;
+	uint16_t rule;
+};
+
+_Static_assert(sizeof(struct prefix4) == 8 && _Alignof(struct prefix4) == 2, "prefix4 layout");
+_Static_assert(sizeof(struct prefix6) == 20 && _Alignof(struct prefix6) == 2, "prefix6 layout");
 
 /* A device spec: netifd interface name or kernel netdev name, resolved at runtime. */
 struct cfg_device {

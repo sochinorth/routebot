@@ -25,7 +25,6 @@ endforeach()
 add_executable(routebot
 	src/main.c
 	src/config.c
-	src/cidr.c
 	src/nl.c
 	src/ifstate.c
 	src/sync.c

@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <glob.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -374,6 +375,276 @@ static int parse_group(struct uci_context *ctx, struct uci_section *s, struct co
 	return 0;
 }
 
+/* --- CIDR lists --- */
+
+#define PREFIX_STRLEN	(INET6_ADDRSTRLEN + 4)
+#define CONFLICT_WARN	10
+
+/*
+ * Dotted quad as inet_pton(AF_INET) takes it, on glibc and musl alike:
+ * exactly four decimal octets of 1-3 digits, each at most 255, no leading
+ * zero unless the octet is "0", no sign, no other characters.
+ */
+static bool parse_v4(const char *s, size_t len, uint8_t *addr)
+{
+	const char *end = s + len;
+
+	for (int i = 0; i < 4; i++) {
+		unsigned v = 0, digits = 0;
+
+		for (; s < end && *s >= '0' && *s <= '9'; s++, digits++) {
+			if (digits == 3 || (digits && !v))
+				return false;	/* too long, or a leading zero */
+			v = v * 10 + (*s - '0');
+		}
+		if (!digits || v > 255)
+			return false;
+		addr[i] = v;
+		if (i < 3 && (s == end || *s++ != '.'))
+			return false;
+	}
+	return s == end;
+}
+
+/*
+ * Parse "addr[/plen]" from s[0..len). Returns AF_INET or AF_INET6, -1 if
+ * invalid. Host bits are cleared; *masked tells whether any were set.
+ */
+static int cidr_parse(const char *s, size_t len, uint8_t addr[16], uint8_t *plen, bool *masked)
+{
+	const char *slash;
+	size_t alen, a_len;
+	unsigned long pl;
+	int family;
+
+	memset(addr, 0, 16);
+	*masked = false;
+	if (len >= PREFIX_STRLEN)
+		return -1;
+
+	slash = memchr(s, '/', len);
+	a_len = slash ? (size_t)(slash - s) : len;
+	if (parse_v4(s, a_len, addr)) {
+		family = AF_INET;
+	} else {
+		char buf[PREFIX_STRLEN];
+
+		memcpy(buf, s, a_len);
+		buf[a_len] = '\0';
+		if (inet_pton(AF_INET6, buf, addr) != 1)
+			return -1;
+		family = AF_INET6;
+	}
+
+	alen = family == AF_INET ? 4 : 16;
+	pl = alen * 8;
+	if (slash) {
+		/* decimal digits only, leading zeros fine, as strtoul took them */
+		const char *p = slash + 1, *end = s + len;
+
+		if (p == end)
+			return -1;
+		for (pl = 0; p < end; p++) {
+			if (*p < '0' || *p > '9')
+				return -1;
+			if (pl <= 128)
+				pl = pl * 10 + (*p - '0');
+		}
+		if (pl > alen * 8)
+			return -1;
+	}
+	*plen = pl;
+
+	for (size_t i = 0; i < alen; i++) {
+		int bits = (int)pl - (int)i * 8;
+		uint8_t mask = bits >= 8 ? 0xff : bits <= 0 ? 0 : (uint8_t)(0xff << (8 - bits));
+
+		if (addr[i] & ~mask)
+			*masked = true;
+		addr[i] &= mask;
+	}
+
+	return family;
+}
+
+static const char *prefix_fmt(int family, const uint8_t *addr, uint8_t plen, char *buf)
+{
+	inet_ntop(family, addr, buf, INET6_ADDRSTRLEN);
+	sprintf(buf + strlen(buf), "/%u", plen);
+	return buf;
+}
+
+/* --- building the sorted arrays --- */
+
+/* Collects one family's prefixes, then sorts them into a struct prefix4/6 array. */
+struct prefix_build {
+	uint8_t *p;		/* elements of esz bytes */
+	size_t n, cap;
+	uint8_t esz, alen;
+};
+
+/*
+ * Entries are handled as bytes: alen address bytes, plen, pad, rule. The
+ * helpers take alen (4 or 16) so each call site compiles to fixed sizes.
+ */
+#define ESZ(alen)	((alen) + 4u)
+
+static inline uint32_t load_be32(const uint8_t *p)
+{
+	return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
+}
+
+static inline uint64_t load_be64(const uint8_t *p)
+{
+	return (uint64_t)load_be32(p) << 32 | load_be32(p + 4);
+}
+
+/* (addr, plen) order */
+static inline int key_cmp(unsigned alen, const uint8_t *x, const uint8_t *y)
+{
+	uint64_t a, b;
+
+	if (alen == 4) {
+		a = (uint64_t)load_be32(x) << 8 | x[4];
+		b = (uint64_t)load_be32(y) << 8 | y[4];
+	} else {
+		a = load_be64(x);
+		b = load_be64(y);
+		if (a == b) {
+			a = load_be64(x + 8);
+			b = load_be64(y + 8);
+		}
+		if (a == b) {
+			a = x[16];
+			b = y[16];
+		}
+	}
+	return (a > b) - (a < b);
+}
+
+static inline uint16_t rule_of(unsigned alen, const uint8_t *x)
+{
+	uint16_t r;
+
+	memcpy(&r, x + alen + 2, sizeof(r));
+	return r;
+}
+
+/* (addr, plen, rule) order: total, entries that tie are identical */
+static int full_cmp(unsigned alen, const uint8_t *x, const uint8_t *y)
+{
+	int r = key_cmp(alen, x, y);
+
+	if (r)
+		return r;
+	return (int)rule_of(alen, x) - (int)rule_of(alen, y);
+}
+
+static inline uint8_t *at(const struct prefix_build *b, size_t i)
+{
+	return b->p + i * b->esz;
+}
+
+static void prefix_build_init(struct prefix_build *b, int family)
+{
+	memset(b, 0, sizeof(*b));
+	b->alen = family == AF_INET ? 4 : 16;
+	b->esz = ESZ(b->alen);
+}
+
+static int prefix_build_add(struct prefix_build *b, const uint8_t *addr, uint8_t plen, uint16_t rule)
+{
+	uint8_t *e;
+
+	if (b->n == b->cap) {
+		/* 1.5x: big blocks are mmapped, realloc moves them with mremap */
+		size_t cap = b->cap ? b->cap + b->cap / 2 : 1024;
+		uint8_t *np = realloc(b->p, cap * b->esz);
+
+		if (!np)
+			return -1;
+		b->p = np;
+		b->cap = cap;
+	}
+	e = at(b, b->n++);
+	memcpy(e, addr, b->alen);
+	e[b->alen] = plen;
+	e[b->alen + 1] = 0;
+	memcpy(e + b->alen + 2, &rule, sizeof(rule));
+	return 0;
+}
+
+static int cmp4(const void *x, const void *y)
+{
+	return full_cmp(4, x, y);
+}
+
+static int cmp6(const void *x, const void *y)
+{
+	return full_cmp(16, x, y);
+}
+
+static void prefix_build_free(struct prefix_build *b)
+{
+	free(b->p);
+	prefix_build_init(b, b->alen == 4 ? AF_INET : AF_INET6);
+}
+
+/*
+ * Sorts by (addr, plen) and the lowest rule, drops all but the first of
+ * each key, warning when a dropped one belongs to another group (the first
+ * CONFLICT_WARN times, counted in *n_conflicts). Hands the exact-size
+ * array over in *out and frees the rest. Returns the length.
+ */
+static size_t prefix_build_finish(struct prefix_build *b, int family, void **out,
+                                  const struct config *c, const char *const *rule_names,
+                                  size_t *n_conflicts)
+{
+	const unsigned alen = b->alen;
+	char buf[PREFIX_STRLEN];
+	size_t w = 0;
+
+	/* the rule breaks ties: the order is total, the lowest rule comes first */
+	if (b->n > 1)
+		qsort(b->p, b->n, b->esz, alen == 4 ? cmp4 : cmp6);
+
+	for (size_t i = 0; i < b->n; i++) {
+		uint8_t *e = at(b, i);
+
+		if (w) {
+			const uint8_t *win = at(b, w - 1);
+
+			if (!key_cmp(alen, win, e)) {
+				uint16_t rw = rule_of(alen, win), rl = rule_of(alen, e);
+				uint16_t gw = c->rule_group[rw], gl = c->rule_group[rl];
+
+				if (gw != gl && (*n_conflicts)++ < CONFLICT_WARN)
+					warn("%s: claimed by rule '%s' (%s) and rule '%s' (%s), "
+					     "first one wins", prefix_fmt(family, e, e[alen], buf),
+					     rule_names[rw], c->groups[gw].name,
+					     rule_names[rl], c->groups[gl].name);
+				continue;
+			}
+		}
+		if (w != i)
+			memcpy(at(b, w), e, b->esz);
+		w++;
+	}
+
+	if (!w) {
+		free(b->p);
+		*out = NULL;
+	} else {
+		/* exact size; shrinking a mmapped block is an mremap, no copy */
+		uint8_t *np = realloc(b->p, w * b->esz);
+
+		*out = np ? np : b->p;
+	}
+	b->p = NULL;
+	prefix_build_free(b);
+	return w;
+}
+
 /*
  * List files are read through one window, each line scanned once. A line is
  * cut every 511 bytes, as the fgets() with a 512-byte buffer this replaced
@@ -732,7 +1003,6 @@ struct config *config_load(const char *path, const struct config *prev)
 	struct uci_package *pkg = NULL;
 	struct uci_element *e;
 	struct prefix_build pb[2];
-	struct conflict_log cl = {};
 	struct cidrset *sets = NULL;
 	struct fp_build fp = {};
 	size_t n_raw, n_sets = 0;
@@ -743,8 +1013,7 @@ struct config *config_load(const char *path, const struct config *prev)
 		.timer_busy = DEFAULT_TIMER_BUSY,
 	};
 	const char **rule_names = NULL;
-	const char **group_names = NULL;
-	size_t n_rules = 0, n_globals = 0;
+	size_t n_rules = 0, n_globals = 0, n_conflicts = 0;
 	struct config *c;
 	FILE *f = NULL;
 	bool ok = false, reused;
@@ -876,12 +1145,9 @@ struct config *config_load(const char *path, const struct config *prev)
 	reused = lists_reuse(c, prev, &fp);
 	if (!reused) {
 		c->lists = calloc(1, sizeof(*c->lists));
-		group_names = calloc(c->n_groups + 1, sizeof(*group_names));
-		if (!c->lists || !group_names)
+		if (!c->lists)
 			goto out;
 		c->lists->refs = 1;
-		for (size_t i = 0; i < c->n_groups; i++)
-			group_names[i] = c->groups[i].name;
 	}
 	for (size_t i = 0; i < n_sets; i++)
 		if (load_cidrset(&sets[i], reused ? NULL : pb))
@@ -890,17 +1156,14 @@ struct config *config_load(const char *path, const struct config *prev)
 	if (reused) {
 		debug("config: lists unchanged, reused");
 	} else {
-		cl.rule_group = c->rule_group;
-		cl.rule_names = rule_names;
-		cl.group_names = group_names;
 		n_raw = pb[0].n + pb[1].n;
-		c->n_p4 = prefix_build_finish(&pb[0], AF_INET, &arr, &cl);
+		c->n_p4 = prefix_build_finish(&pb[0], AF_INET, &arr, c, rule_names, &n_conflicts);
 		c->p4 = arr;
-		c->n_p6 = prefix_build_finish(&pb[1], AF_INET6, &arr, &cl);
+		c->n_p6 = prefix_build_finish(&pb[1], AF_INET6, &arr, c, rule_names, &n_conflicts);
 		c->p6 = arr;
-		if (cl.n > CONFLICT_WARN)
+		if (n_conflicts > CONFLICT_WARN)
 			warn("%zu more prefixes claimed by several rules, first one wins",
-			     cl.n - CONFLICT_WARN);
+			     n_conflicts - CONFLICT_WARN);
 		c->lists->n_dup = n_raw - c->n_p4 - c->n_p6;
 		if (!fp.bad) {
 			c->lists->fp = fp.p;
@@ -921,7 +1184,6 @@ out:
 	free(sets);
 	free(fp.p);
 	free(rule_names);
-	free(group_names);
 	if (ctx)
 		uci_free_context(ctx);
 	if (f)

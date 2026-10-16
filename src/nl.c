@@ -11,7 +11,6 @@
 #include <linux/nexthop.h>
 #include <linux/rtnetlink.h>
 
-#include "cidr.h"
 #include "log.h"
 #include "nl.h"
 

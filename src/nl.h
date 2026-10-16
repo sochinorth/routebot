@@ -2,7 +2,9 @@
 #define ROUTEBOT_NL_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+#include <sys/socket.h>
 
 #include <libmnl/libmnl.h>
 
@@ -48,6 +50,11 @@ struct route_spec {
 	uint8_t src[16];
 	uint8_t gw[16];
 };
+
+static inline size_t family_alen(int family)
+{
+	return family == AF_INET ? 4 : 16;
+}
 
 #define MAX_NH_GROUP 32
 
