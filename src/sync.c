@@ -256,15 +256,32 @@ static void plan_free(struct plan *p)
 	memset(p, 0, sizeof(*p));
 }
 
+/* What w renders to at most, sized exactly where it's cheap to count. */
+static void plan_sizes(const struct config *c, size_t *n_members, size_t *n_small)
+{
+	bool probe = any_probe(c);
+
+	*n_members = c->n_groups ? 2 : 0;
+	*n_small = 0;
+	for (size_t d = 0; d < c->n_devices; d++) {
+		*n_members += dev_member(c, d, false) ? 2 : 0;
+		*n_small += probe && dev_member(c, d, true) ? 2 : 0;
+	}
+	for (size_t g = 0; g < c->n_groups; g++)
+		*n_small += c->groups[g].fwmark ? 4 : 0;
+}
+
 static int plan_build(const struct world *w, struct plan *p)
 {
 	const struct config *c = w->cfg;
-	size_t nd = c ? c->n_devices : 0, ng = c ? c->n_groups : 0;
+	size_t ng = c ? c->n_groups : 0, nm = 0, ns = 0;
 
 	memset(p, 0, sizeof(*p));
-	p->members = calloc(2 * nd + 3, sizeof(*p->members));
+	if (c)
+		plan_sizes(c, &nm, &ns);
+	p->members = calloc(nm + 1, sizeof(*p->members));
 	p->groups = calloc(2 * ng + 1, sizeof(*p->groups));
-	p->small = calloc(2 * (2 * ng + nd) + 1, sizeof(*p->small));
+	p->small = calloc(ns + 1, sizeof(*p->small));
 	p->rules = calloc(2 * (ng + 2), sizeof(*p->rules));
 	if (!p->members || !p->groups || !p->small || !p->rules) {
 		plan_free(p);
@@ -782,13 +799,15 @@ void sync_apply(struct nl *nl, const struct world *old, const struct world *new,
 		plan_free(&po);
 		return;
 	}
-	doomed.ids = calloc(po.n_members + po.n_groups + 1, sizeof(*doomed.ids));
-	rd.ids = calloc(po.n_members + po.n_groups + 1, sizeof(*rd.ids));
-	if (!doomed.ids || !rd.ids) {
+	/* both hold old ids, each at most once */
+	n_del = po.n_members + po.n_groups + 1;
+	doomed.ids = calloc(2 * n_del, sizeof(*doomed.ids));
+	if (!doomed.ids) {
 		err("out of memory");
 		st->errors++;
 		goto out;
 	}
+	rd.ids = doomed.ids + n_del;
 
 	/* what goes, or may have gone, has to be set again */
 	find_doomed(&po, &pn, &doomed, &n_del);
@@ -820,7 +839,6 @@ void sync_apply(struct nl *nl, const struct world *old, const struct world *new,
 
 out:
 	free(doomed.ids);
-	free(rd.ids);
 	plan_free(&po);
 	plan_free(&pn);
 }
