@@ -58,13 +58,15 @@ struct nh_grp_entry {
 };
 
 /*
- * A nexthop object: either a single device nexthop (n_grp == 0, family set,
- * oif + optional gateway) or a resilient group (n_grp > 0, family AF_UNSPEC).
+ * A nexthop object: either a single nexthop (n_grp == 0, family set, oif +
+ * optional gateway, or a blackhole) or a resilient group (n_grp > 0, sent
+ * as AF_UNSPEC).
  */
 struct nexthop_spec {
 	uint32_t id;
 	uint8_t family;
 	uint8_t proto;
+	bool blackhole;
 	int oif;
 	bool has_gw;
 	uint8_t gw[16];

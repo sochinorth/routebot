@@ -561,9 +561,9 @@ static int validate(struct config *c, const struct nh_defaults *d)
 		warn("config: rules %u..%llu reach the main table rule (32766)",
 		     c->rule_prio, (unsigned long long)last);
 
-	if (!c->nexthop_id || cfg_nhid_end(c) > UINT32_MAX) {
-		err("config: nexthop_id range %u..%llu is invalid",
-		    c->nexthop_id, (unsigned long long)cfg_nhid_end(c));
+	if (c->nexthop_id < 2 || cfg_nhid_end(c) > UINT32_MAX) {
+		err("config: nexthop_id %u: range %lld..%llu is invalid", c->nexthop_id,
+		    (long long)c->nexthop_id - 1, (unsigned long long)cfg_nhid_end(c));
 		return -1;
 	}
 

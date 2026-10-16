@@ -520,6 +520,9 @@ void nl_nexthop(struct nl *nl, enum nl_op op, const struct nexthop_spec *n)
 		nhm->nh_protocol = n->proto;
 		if (n->n_grp) {
 			put_res_group(nlh, n);
+		} else if (n->blackhole) {
+			nhm->nh_family = n->family;
+			mnl_attr_put(nlh, NHA_BLACKHOLE, 0, NULL);
 		} else {
 			nhm->nh_family = n->family;
 			mnl_attr_put_u32(nlh, NHA_OIF, n->oif);

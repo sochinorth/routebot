@@ -87,7 +87,9 @@ static inline uint32_t cfg_group_prio(const struct config *c, size_t g)
 /*
  * Nexthop ids interleave devices and groups in blocks of four: device d at
  * 4d + f, group g at 4g + 2 + f. Each id depends on its own index alone, so
- * a group count change doesn't renumber every device. f = fam_idx.
+ * a group count change doesn't renumber every device. f = fam_idx. The
+ * blackhole nexthops that an empty group holds take group slot -1, just
+ * below the first block, so no other id moves for them.
  */
 static inline uint32_t cfg_member_nhid(const struct config *c, size_t d, int f)
 {
@@ -99,7 +101,17 @@ static inline uint32_t cfg_group_nhid(const struct config *c, size_t g, int f)
 	return c->nexthop_id + 3 + 4 * g + f;
 }
 
-/* Highest nexthop id in use, for range checks. */
+static inline uint32_t cfg_blackhole_nhid(const struct config *c, int f)
+{
+	return c->nexthop_id - 1 + f;
+}
+
+/* Lowest and highest nexthop id in use, for range checks. */
+static inline uint32_t cfg_nhid_start(const struct config *c)
+{
+	return c->nexthop_id - 1;
+}
+
 static inline uint64_t cfg_nhid_end(const struct config *c)
 {
 	uint64_t d = c->n_devices ? 4 * (uint64_t)c->n_devices - 2 : 0;
