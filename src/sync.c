@@ -646,6 +646,21 @@ out:
 
 /* --- flush --- */
 
+/*
+ * Routes are deleted in chunks of this many: a dump collects at most a
+ * chunk, the rest of it is drained and dumped again after the deletes.
+ */
+#define FLUSH_CHUNK 1024
+
+/* What a route delete matches on; nl_route ignores the rest for NL_DEL. */
+struct flush_route {
+	uint8_t family;
+	uint8_t plen;
+	uint32_t table;
+	uint32_t metric;
+	uint8_t dst[16];
+};
+
 struct flush_nh {
 	uint32_t id;
 	bool group;
@@ -653,12 +668,13 @@ struct flush_nh {
 
 struct flush_ctx {
 	uint8_t proto;
-	struct route_spec *routes;
-	size_t n_routes, cap_routes;
 	struct rule_spec *rules;
 	size_t n_rules, cap_rules;
 	struct flush_nh *nhs;
-	size_t n_nhs, cap_nhs, n_groups;
+	size_t n_nhs, cap_nhs;
+	struct flush_route *routes;	/* FLUSH_CHUNK */
+	size_t n_routes;
+	size_t n_seen;		/* routes in this dump, kept or not */
 	bool oom;
 };
 
@@ -692,25 +708,20 @@ static int flush_route_cb(const struct nlmsghdr *nlh, void *data)
 	struct flush_ctx *fc = data;
 	const struct rtmsg *rtm = mnl_nlmsg_get_payload(nlh);
 	struct attrs t = {};
-	struct route_spec *r, *nr;
+	struct flush_route *r;
 
 	if (rtm->rtm_protocol != fc->proto ||
 	    (rtm->rtm_family != AF_INET && rtm->rtm_family != AF_INET6))
 		return MNL_CB_OK;
+	/* past a full chunk, only count: the dump has to be read to its end */
+	if (fc->n_seen++ >= FLUSH_CHUNK)
+		return MNL_CB_OK;
 
-	nr = grow(fc->routes, &fc->cap_routes, fc->n_routes, sizeof(*nr));
-	if (!nr) {
-		fc->oom = true;
-		return MNL_CB_ERROR;
-	}
-	fc->routes = nr;
 	r = &fc->routes[fc->n_routes++];
 	memset(r, 0, sizeof(*r));
-
 	mnl_attr_parse(nlh, sizeof(*rtm), attrs_cb, &t);
 	r->family = rtm->rtm_family;
 	r->plen = rtm->rtm_dst_len;
-	r->proto = rtm->rtm_protocol;
 	r->table = t.tb[RTA_TABLE] ? mnl_attr_get_u32(t.tb[RTA_TABLE]) : rtm->rtm_table;
 	r->metric = t.tb[RTA_PRIORITY] ? mnl_attr_get_u32(t.tb[RTA_PRIORITY]) : 0;
 	if (t.tb[RTA_DST] && mnl_attr_get_payload_len(t.tb[RTA_DST]) <= sizeof(r->dst))
@@ -771,7 +782,6 @@ static int flush_nh_cb(const struct nlmsghdr *nlh, void *data)
 		.id = mnl_attr_get_u32(t.tb[NHA_ID]),
 		.group = !!t.tb[NHA_GROUP],
 	};
-	fc->n_groups += !!t.tb[NHA_GROUP];
 	return MNL_CB_OK;
 }
 
@@ -782,15 +792,92 @@ static void flush_free(struct flush_ctx *fc)
 	free(fc->nhs);
 }
 
+/* Delete fc's nexthops that are groups, or that aren't. */
+static void flush_nexthops(struct nl *nl, const struct flush_ctx *fc, bool groups)
+{
+	for (size_t i = 0; i < fc->n_nhs; i++)
+		if (fc->nhs[i].group == groups)
+			nl_nexthop(nl, NL_DEL, &(struct nexthop_spec){ .id = fc->nhs[i].id });
+}
+
+/*
+ * Delete what's left of the routes with fc's proto, a chunk per dump, and
+ * count them. Stops when a dump finds no fewer than the one before: those
+ * routes can't be deleted by key (a v6 source prefix, say).
+ */
+static int flush_routes(struct nl *nl, struct flush_ctx *fc, size_t *n_deleted,
+                        unsigned *errors)
+{
+	char buf[128] __attribute__((aligned(4)));
+	size_t last = SIZE_MAX;
+
+	for (;;) {
+		struct nlmsghdr *nlh = mnl_nlmsg_put_header(buf);
+		struct rtmsg *rtm;
+		int ret;
+
+		/* with NETLINK_GET_STRICT_CHK the kernel filters by protocol already */
+		nlh->nlmsg_type = RTM_GETROUTE;
+		rtm = mnl_nlmsg_put_extra_header(nlh, sizeof(*rtm));
+		rtm->rtm_family = AF_UNSPEC;
+		rtm->rtm_protocol = fc->proto;
+		fc->n_routes = fc->n_seen = 0;
+		ret = nl_dump(nl, nlh, flush_route_cb, fc);
+		if (ret)
+			return ret;
+		if (!fc->n_seen)
+			return 0;
+		if (fc->n_seen >= last) {
+			warn("flush: %zu routes with proto %u can't be deleted", fc->n_seen, fc->proto);
+			(*errors)++;
+			return 0;
+		}
+		last = fc->n_seen;
+
+		nl_batch_begin(nl);
+		for (size_t i = 0; i < fc->n_routes; i++) {
+			const struct flush_route *k = &fc->routes[i];
+			struct route_spec r = {
+				.family = k->family,
+				.plen = k->plen,
+				.proto = fc->proto,
+				.table = k->table,
+				.metric = k->metric,
+			};
+
+			memcpy(r.dst, k->dst, sizeof(r.dst));
+			nl_route(nl, NL_DEL, &r);
+		}
+		*errors += nl_batch_end(nl);
+		*n_deleted += fc->n_routes;
+		if (fc->n_seen == fc->n_routes)
+			return 0;
+	}
+}
+
+/*
+ * Rules first, then the groups: the kernel deletes every route on a deleted
+ * nexthop by itself, which is nearly all of them, much faster than route
+ * by route. What's left are blackholes and the probe routes, deleted in
+ * chunks so memory stays bounded however many there are. Then the members,
+ * no longer in any group, and any route still on them.
+ */
 int sync_flush(struct nl *nl, uint8_t proto)
 {
 	char buf[128] __attribute__((aligned(4)));
 	struct flush_ctx fc = { .proto = proto };
 	struct nlmsghdr *nlh;
 	struct fib_rule_hdr *frh;
-	struct rtmsg *rtm;
+	size_t n_routes = 0;
 	unsigned errors;
 	int ret;
+
+	fc.routes = malloc(FLUSH_CHUNK * sizeof(*fc.routes));
+	if (!fc.routes) {
+		fc.oom = true;
+		ret = -ENOMEM;
+		goto fail;
+	}
 
 	nlh = mnl_nlmsg_put_header(buf);
 	nlh->nlmsg_type = RTM_GETRULE;
@@ -800,38 +887,29 @@ int sync_flush(struct nl *nl, uint8_t proto)
 	if (ret)
 		goto fail;
 
-	/* with NETLINK_GET_STRICT_CHK the kernel filters by protocol already */
-	nlh = mnl_nlmsg_put_header(buf);
-	nlh->nlmsg_type = RTM_GETROUTE;
-	rtm = mnl_nlmsg_put_extra_header(nlh, sizeof(*rtm));
-	rtm->rtm_family = AF_UNSPEC;
-	rtm->rtm_protocol = proto;
-	ret = nl_dump(nl, nlh, flush_route_cb, &fc);
-	if (ret)
-		goto fail;
-
 	/* nothing to flush on kernels without nexthop objects */
 	ret = nl_dump_nexthops(nl, flush_nh_cb, &fc);
 	if (ret && ret != -EOPNOTSUPP)
 		goto fail;
 
-	/* groups before their members, so no group ever empties under us */
 	nl_batch_begin(nl);
 	for (size_t i = 0; i < fc.n_rules; i++)
 		nl_rule(nl, NL_DEL, &fc.rules[i]);
-	for (size_t i = 0; i < fc.n_routes; i++)
-		nl_route(nl, NL_DEL, &fc.routes[i]);
-	for (size_t i = 0; i < fc.n_nhs; i++)
-		if (fc.nhs[i].group)
-			nl_nexthop(nl, NL_DEL, &(struct nexthop_spec){ .id = fc.nhs[i].id });
-	for (size_t i = 0; i < fc.n_nhs; i++)
-		if (!fc.nhs[i].group)
-			nl_nexthop(nl, NL_DEL, &(struct nexthop_spec){ .id = fc.nhs[i].id });
+	flush_nexthops(nl, &fc, true);
 	errors = nl_batch_end(nl);
 
-	if (fc.n_rules || fc.n_routes || fc.n_nhs)
-		info("flush: removed %zu rules, %zu routes, %zu nexthops with proto %u%s",
-		     fc.n_rules, fc.n_routes, fc.n_nhs, proto, errors ? " (with errors)" : "");
+	ret = flush_routes(nl, &fc, &n_routes, &errors);
+	if (ret)
+		goto fail;
+
+	nl_batch_begin(nl);
+	flush_nexthops(nl, &fc, false);
+	errors += nl_batch_end(nl);
+
+	if (fc.n_rules || fc.n_nhs || n_routes)
+		info("flush: removed %zu rules, %zu nexthops and the routes on them, "
+		     "%zu other routes with proto %u%s", fc.n_rules, fc.n_nhs, n_routes, proto,
+		     errors ? " (with errors)" : "");
 
 	flush_free(&fc);
 	return errors ? -EIO : 0;
