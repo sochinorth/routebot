@@ -261,7 +261,7 @@ has "20000:	from all fwmark 0/0xff000000 lookup 30000 proto 233" ip rule
 has "id 10014 group 10008/10012,2 $RES" nh
 TABLE_ID=10000 RULE_PRIO=10000 NHID=10000; write_config
 start
-grep -q "flush: removed 8 rules, 13 routes, 12 nexthops with proto 233" "$LOG" &&
+grep -q "flush: removed 8 rules, 12 nexthops and the routes on them, 0 other routes with proto 233" "$LOG" &&
 	pass "stale state flushed" || fail "no flush"
 empty ip route show table 30000
 has "1.0.0.0/24 nhid 10007 dev vpn0 proto 233" ip route show table 10000
