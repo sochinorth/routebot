@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Sampling and reporting for tests/bench/bench.sh.
 
-  rbstat.py snap    LABEL PID COUNTERS SNAPS
+  rbstat.py snap    LABEL PID COUNTERS SNAPS [--wall SECONDS]
   rbstat.py quiesce LABEL PID COUNTERS SNAPS [--since NS] [--window MS] [--timeout S]
   rbstat.py report  SNAPS META OUT
 
 snap appends one JSON line to SNAPS: the mallocstat counters (COUNTERS is
 the shim's MALLOCSTAT_FILE), CPU time and memory of PID. PID may be gone,
-then only the counters are recorded.
+then only the counters are recorded (the shim's exit record included).
+--wall records a duration measured by the caller.
 
 quiesce first waits until PID is idle, then snaps. Idle means, for WINDOW ms
 in a row (default 300): the allocation counters, the scheduler's CPU time
@@ -28,7 +29,8 @@ import time
 
 # struct ms_counters in mallocstat.c
 FIELDS = ["magic", "version", "n_malloc", "n_calloc", "n_realloc", "n_memalign", "n_free",
-	  "n_allocs", "bytes", "live", "peak_live", "n_big", "n_failed"]
+	  "n_allocs", "bytes", "live", "peak_live", "n_big", "n_failed",
+	  "exited", "exit_utime_us", "exit_stime_us", "exit_sched_ns", "exit_maxrss_kb"]
 MAGIC = 0x3174617473636c6d
 CLK_TCK = os.sysconf("SC_CLK_TCK")
 # x86_64 epoll_wait, epoll_pwait, epoll_pwait2; aarch64 epoll_pwait, epoll_pwait2
@@ -45,6 +47,8 @@ def counters(path):
 	if len(raw) < 8 * len(FIELDS):
 		return None
 	vals = dict(zip(FIELDS, struct.unpack(f"<{len(FIELDS)}Q", raw)))
+	if vals["version"] < 2:
+		return None
 	return vals if vals["magic"] == MAGIC else None
 
 
@@ -200,9 +204,11 @@ def report(snaps_path, meta_path, out_path):
 
 	zero = {"label": "exec", "ms": {k: 0 for k in FIELDS[2:]},
 		"proc": {"utime": 0, "stime": 0, "sched_ns": 0}}
-	if "startup" in by:
-		st = by["startup"][0]
-		res["units"]["startup"] = per_unit(diff(zero, st), 1, st.get("busy_s"))
+	# startups from exec: a clean one, and one after a crash (restart_dirty)
+	for unit in ("startup", "restart_dirty"):
+		if unit in by:
+			st = by[unit][0]
+			res["units"][unit] = per_unit(diff(zero, st), 1, st.get("busy_s"))
 	for phase in meta.get("phases", []):
 		if phase in by:
 			res["memory"][phase] = memory(by[phase][-1])
@@ -214,10 +220,25 @@ def report(snaps_path, meta_path, out_path):
 		wall = sum(s.get("busy_s", 0) for s in its)
 		res["units"][unit] = per_unit(diff(begin[-1], its[-1]), n, wall)
 	if "exit" in by and "end" in by:
-		d = diff(by["end"][-1], by["exit"][-1])
-		ex = by["exit"][-1].get("ms", {})
+		end, ex = by["end"][-1], by["exit"][-1]
+		d = diff(end, ex)
+		ms = ex.get("ms", {})
 		res["shutdown"] = {"allocs": d.get("n_allocs"), "bytes": d.get("bytes"),
-				   "heap_live_at_exit_B": ex.get("live")}
+				   "heap_live_at_exit_B": ms.get("live")}
+		# SIGTERM to exit: CPU from the shim's exit record, wall from bench.sh
+		if ms.get("exited") and "proc" in end:
+			tick_ms = 1000 / CLK_TCK
+			user = ms["exit_utime_us"] / 1000 - end["proc"]["utime"] * tick_ms
+			sys_ = ms["exit_stime_us"] / 1000 - end["proc"]["stime"] * tick_ms
+			res["shutdown"].update({
+				"user_ms": round(user, 1), "sys_ms": round(sys_, 1),
+				"cpu_ms": round(user + sys_, 1),
+				"sched_cpu_ms": (ms["exit_sched_ns"] - end["proc"]["sched_ns"]) / 1e6,
+			})
+			if "exit" in meta.get("phases", []):
+				res["memory"].setdefault("exit", {})["VmHWM_kB"] = ms["exit_maxrss_kb"]
+		if "wall_s" in ex:
+			res["shutdown"]["wall_ms"] = ex["wall_s"] * 1000
 	with open(out_path, "w") as f:
 		json.dump(res, f, indent=1, sort_keys=True)
 		f.write("\n")
@@ -227,8 +248,11 @@ def main():
 	a = sys.argv[1:]
 	if not a:
 		sys.exit(__doc__)
-	if a[0] == "snap" and len(a) == 5:
-		append(a[4], snapshot(a[1], a[2], a[3]))
+	if a[0] == "snap" and len(a) in (5, 7) and a[5:6] in ([], ["--wall"]):
+		s = snapshot(a[1], a[2], a[3])
+		if len(a) == 7:
+			s["wall_s"] = float(a[6])
+		append(a[4], s)
 	elif a[0] == "quiesce" and len(a) >= 5:
 		opts = dict(zip(a[5::2], a[6::2]))
 		s = quiesce(a[1], a[2], a[3], int(opts.get("--since", 0)),

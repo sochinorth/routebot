@@ -270,13 +270,15 @@ far ends and are timing-dependent. A private `ubusd` stands in for OpenWrt's,
 without netifd.
 
 Memory (VmRSS, RssAnon, VmHWM, and the live heap) is sampled at `startup`,
-`after_events`, `after_reload` (one no-op reload), `after_10_reloads` and at
-the `end`. Units, each repeated `BENCH_N` times (50), report allocations,
-bytes allocated and CPU per unit:
+`after_events`, `after_reload` (one no-op reload), `after_10_reloads`, at
+the `end`, at `exit` (VmHWM and heap only) and after `restart_dirty`. Units,
+each repeated `BENCH_N` times (50), report allocations, bytes allocated and
+CPU per unit:
 
 | unit | what happens |
 |---|---|
 | `startup` | exec until idle after "running" (once) |
+| `restart_dirty` | the same, after a routebot with everything installed was killed with SIGKILL: the flush, then a full install (once); the state must equal a clean start's |
 | `link_noop` | an unrelated dummy link is created and deleted |
 | `member_flip` | a `pool` member loses its default routes and gets them back: group replace, no prefix route touched |
 | `blackhole_flip` | `wan` loses its default routes and gets them back: its ~5k prefixes are rewritten twice |
@@ -288,9 +290,11 @@ Allocations are counted by `mallocstat.c`, an `LD_PRELOAD` shim given to
 routebot alone (it drops itself from the environment at start) that keeps its
 counters in a shared file. After each step the bench waits until routebot is
 idle: counters and CPU time unchanged for 300 ms, routebot in `epoll_wait`,
-no signal pending and no unread netlink data. `validate.sh` cross-checks the
-shim against glibc's mtrace and strace and lists the big allocations with
-file:line.
+no signal pending and no unread netlink data. `shutdown` (SIGTERM at the
+`end` until exit: the flush) reports allocations, CPU from the shim's record
+at exit, and wall time; nothing may be left behind. `validate.sh`
+cross-checks the shim against glibc's mtrace and strace and lists the big
+allocations with file:line.
 
 `compare.py` fails on a broken run, a different workload, or a regression of
 more than 10% in memory (per phase) or in allocations or bytes per unit,

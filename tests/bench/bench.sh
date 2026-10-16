@@ -26,7 +26,8 @@ CHECKS=$T/checks
 
 say() { echo "bench: $*"; }
 now() { date +%s%N; }
-snap() { $PY "$HERE/rbstat.py" snap "$1" "${PID:-0}" "$CNT" "$SNAPS"; }
+# snap LABEL [WALL_S]
+snap() { $PY "$HERE/rbstat.py" snap "$1" "${PID:-0}" "$CNT" "$SNAPS" ${2:+--wall "$2"}; }
 # quiesce LABEL [SINCE_NS]
 quiesce() {
 	$PY "$HERE/rbstat.py" quiesce "$1" "$PID" "$CNT" "$SNAPS" \
@@ -39,7 +40,7 @@ expect() { wait_log "$1" >> "$CHECKS"; }
 . "$HERE/setup.sh"
 
 UNITS="link_noop member_flip blackhole_flip link_flap reload_noop reload_small"
-PHASES="startup after_events after_reload after_10_reloads end"
+PHASES="startup after_events after_reload after_10_reloads end exit restart_dirty"
 
 finish() {
 	_ok=false
@@ -73,10 +74,10 @@ EOF
 	exit 0
 }
 
-# first sync line after the mark, for the record
+# first sync line (or line with $2) after the mark, for the record
 SAMPLES=
 sample() {
-	_l=$(tail -n +"$((MARK + 1))" "$LOG" | grep -m1 'sync (' | sed 's/^routebot: [a-z]*: //; s/"/\\"/g' || true)
+	_l=$(tail -n +"$((MARK + 1))" "$LOG" | grep -m1 "${2:-sync (}" | sed 's/^routebot: [a-z]*: //; s/"/\\"/g' || true)
 	SAMPLES="$SAMPLES${SAMPLES:+, }\"$1\": \"$_l\""
 	echo "{ $SAMPLES }" > "$T/samples.json"
 }
@@ -104,6 +105,8 @@ grep -q "invalid CIDR" "$LOG" && pass "invalid lines warned" >> "$CHECKS" || fai
 grep -q "has host bits set" "$LOG" && pass "host bits warned" >> "$CHECKS" || fail "no host bits warning"
 grep -q "ubus: cannot connect" "$LOG" && [ "$UBUS" = true ] && fail "ubus not connected"
 [ "$FAILS" = 0 ] || finish
+# what a clean start installs, for restart_dirty
+kstate > "$T/state.clean"
 
 # --- units ---
 # run_unit NAME: repeats unit_NAME N times between a begin and end snapshot
@@ -214,11 +217,50 @@ run_unit reload_small
 quiesce end
 
 say "shutdown"
+S=$(now)
 kill -TERM "$PID"
 EXIT_STATUS=0
 wait "$PID" || EXIT_STATUS=$?
+E=$(now)
 PID=
-snap exit
+snap exit "$(echo "$S $E" | awk '{ printf "%.6f", ($2 - $1) / 1e9 }')"
 [ "$EXIT_STATUS" = 0 ] && pass "exit status 0" >> "$CHECKS" || fail "exit status $EXIT_STATUS"
+[ -z "$(kstate)" ] && pass "nothing left after exit" >> "$CHECKS" || fail "state left after exit"
+[ "$FAILS" = 0 ] || finish
+
+# --- restart_dirty ---
+# routebot is killed with everything installed; a new one flushes what it
+# left behind and installs it all again: from exec until idle
+say "restart_dirty"
+cp "$T/m03.orig" "$L/misc/m03.lst"
+rb_env() { RB_ENV="env LD_PRELOAD=$SHIM MALLOCSTAT_FILE=$CNT ROUTEBOT_UBUS_SOCKET=$T/ubus.sock"; }
+CNT=$T/mallocstat.crashed; rb_env
+start >> "$CHECKS"
+quiesce restart_crashed
+kill -KILL "$PID"
+wait "$PID" 2>/dev/null || true
+PID=
+CNT=$T/mallocstat.dirty; rb_env
+SINCE=$(now)
+start >> "$CHECKS"
+[ -n "$PID" ] && kill -0 "$PID" 2>/dev/null || { fail "routebot didn't start after a crash"; finish; }
+quiesce restart_dirty "$SINCE"
+expect "flush: removed 10 rules, "
+sample restart_dirty_flush "flush: "
+kstate > "$T/state.dirty"
+if cmp -s "$T/state.clean" "$T/state.dirty"; then
+	pass "restart_dirty: same state as a clean start" >> "$CHECKS"
+else
+	fail "restart_dirty: state differs from a clean start"
+	diff "$T/state.clean" "$T/state.dirty" | head -n 20
+fi
+kill -TERM "$PID"
+_st=0
+wait "$PID" || _st=$?
+PID=
+[ "$_st" = 0 ] && pass "restart_dirty: exit status 0" >> "$CHECKS" ||
+	fail "restart_dirty: exit status $_st"
+[ -z "$(kstate)" ] && pass "restart_dirty: nothing left after exit" >> "$CHECKS" ||
+	fail "restart_dirty: state left after exit"
 if grep -q "Sanitizer\|runtime error:" "$LOG"; then fail "sanitizer reports"; fi
 finish

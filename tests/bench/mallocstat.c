@@ -12,6 +12,10 @@
  * At load the shim removes LD_PRELOAD and its own MALLOCSTAT_* variables
  * from the environment, so nothing the process spawns is instrumented.
  *
+ * At exit (a destructor, so not on SIGKILL) the shim also records the
+ * process's CPU time and peak RSS: the process is gone by the time anyone
+ * could read /proc for its shutdown.
+ *
  * MALLOCSTAT_BT_MIN=<bytes> additionally logs a backtrace of every
  * allocation of at least that many bytes to MALLOCSTAT_BT_FILE (default
  * stderr), as "alloc <fn> <size>" followed by backtrace_symbols_fd() lines.
@@ -33,10 +37,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 #define MS_MAGIC	0x3174617473636c6dULL	/* "mlcstat1" */
-#define MS_VERSION	1
+#define MS_VERSION	2
 
 /* Keep in sync with FIELDS in rbstat.py. All uint64_t. */
 struct ms_counters {
@@ -53,6 +58,12 @@ struct ms_counters {
 	uint64_t peak_live;
 	uint64_t n_big;		/* allocations >= MALLOCSTAT_BT_MIN, if set */
 	uint64_t n_failed;	/* calls that returned NULL */
+	/* at exit, 0 before */
+	uint64_t exited;
+	uint64_t exit_utime_us;
+	uint64_t exit_stime_us;
+	uint64_t exit_sched_ns;	/* /proc/self/schedstat run time */
+	uint64_t exit_maxrss_kb;	/* VmHWM */
 };
 
 extern void *__libc_malloc(size_t);
@@ -118,6 +129,32 @@ static void ms_ctor(void)
 	if (!c)
 		init();
 	strip_env();
+}
+
+/* No allocation in here either: free() still lands in the shim. */
+__attribute__((destructor(101)))
+static void ms_dtor(void)
+{
+	struct rusage ru;
+	char buf[128];
+	ssize_t n;
+	int fd;
+
+	if (!c || getrusage(RUSAGE_SELF, &ru))
+		return;
+	c->exit_utime_us = ru.ru_utime.tv_sec * 1000000ULL + ru.ru_utime.tv_usec;
+	c->exit_stime_us = ru.ru_stime.tv_sec * 1000000ULL + ru.ru_stime.tv_usec;
+	c->exit_maxrss_kb = ru.ru_maxrss;
+	fd = open("/proc/self/schedstat", O_RDONLY | O_CLOEXEC);
+	if (fd >= 0) {
+		n = read(fd, buf, sizeof(buf) - 1);
+		close(fd);
+		if (n > 0) {
+			buf[n] = '\0';
+			c->exit_sched_ns = strtoull(buf, NULL, 10);
+		}
+	}
+	__atomic_store_n(&c->exited, 1, __ATOMIC_RELEASE);
 }
 
 static void bt(const char *fn, size_t size)

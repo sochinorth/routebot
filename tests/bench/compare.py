@@ -98,7 +98,7 @@ def main():
 			if k in bu or k in cu:
 				row("unit", unit, k, bu.get(k), cu.get(k), k in GATED_UNIT)
 	bs, cs = base.get("shutdown", {}), cur.get("shutdown", {})
-	for k in ("allocs", "bytes"):
+	for k in ("allocs", "bytes", "cpu_ms", "user_ms", "sys_ms", "sched_cpu_ms", "wall_ms"):
 		if k in bs:
 			row("shutdown", "", k, bs.get(k), cs.get(k), False)
 

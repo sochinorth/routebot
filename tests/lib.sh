@@ -89,3 +89,12 @@ nh() { ip nexthop show | sed 's/ unbalanced_time [0-9]*//'; }
 
 # run link changes while routebot is stopped, so it reads them as one batch
 frozen() { kill -STOP "$PID"; "$@"; mark; kill -CONT "$PID"; }
+
+# everything routebot owns in the kernel, in a stable order
+kstate() {
+    ip route show table all proto 233
+    ip -6 route show table all proto 233
+    nh | grep 'proto 233' || true
+    ip rule | grep 'proto 233' || true
+    ip -6 rule | grep 'proto 233' || true
+}
