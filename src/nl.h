@@ -31,6 +31,24 @@ struct route_spec {
 	uint8_t gw[16];
 };
 
+/*
+ * Everything the kernel matches a route delete on that tells two routes of
+ * one protocol apart: v4 by table, dst, tos and metric, v6 by table, dst,
+ * source prefix and metric (a v6 multipath route goes as a whole). Type,
+ * scope and nexthops are left out, so they match anything; where two routes
+ * still share a key, each delete takes one.
+ */
+struct route_key {
+	uint8_t family;
+	uint8_t dst_len;
+	uint8_t src_len;	/* v6 only */
+	uint8_t tos;		/* v4 only */
+	uint32_t table;
+	uint32_t metric;	/* 0 = any (v4: the lowest first) */
+	uint8_t dst[16];
+	uint8_t src[16];
+};
+
 #define MAX_NH_GROUP 32
 
 struct nh_grp_entry {
@@ -95,6 +113,8 @@ int nl_dump_nexthops(struct nl *nl, mnl_cb_t cb, void *data);
  */
 void nl_batch_begin(struct nl *nl);
 void nl_route(struct nl *nl, enum nl_op op, const struct route_spec *r);
+/* Delete the route with key k and protocol proto. */
+void nl_route_del(struct nl *nl, const struct route_key *k, uint8_t proto);
 void nl_rule(struct nl *nl, enum nl_op op, const struct rule_spec *r);
 /* NL_SET creates or replaces in place; on delete only id matters. */
 void nl_nexthop(struct nl *nl, enum nl_op op, const struct nexthop_spec *n);

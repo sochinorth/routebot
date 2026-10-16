@@ -428,6 +428,34 @@ void nl_route(struct nl *nl, enum nl_op op, const struct route_spec *r)
 	batch_next(nl);
 }
 
+void nl_route_del(struct nl *nl, const struct route_key *k, uint8_t proto)
+{
+	size_t alen = k->family == AF_INET ? 4 : 16;
+	struct nlmsghdr *nlh;
+	struct rtmsg *rtm;
+
+	nlh = batch_put(nl, RTM_DELROUTE, 0);
+	rtm = mnl_nlmsg_put_extra_header(nlh, sizeof(*rtm));
+	rtm->rtm_family = k->family;
+	rtm->rtm_dst_len = k->dst_len;
+	rtm->rtm_src_len = k->src_len;
+	rtm->rtm_tos = k->tos;
+	rtm->rtm_table = k->table < 256 ? k->table : RT_TABLE_UNSPEC;
+	rtm->rtm_protocol = proto;
+	rtm->rtm_scope = RT_SCOPE_NOWHERE;
+	rtm->rtm_type = RTN_UNSPEC;
+
+	mnl_attr_put_u32(nlh, RTA_TABLE, k->table);
+	if (k->dst_len)
+		mnl_attr_put(nlh, RTA_DST, alen, k->dst);
+	if (k->src_len)
+		mnl_attr_put(nlh, RTA_SRC, alen, k->src);
+	if (k->metric)
+		mnl_attr_put_u32(nlh, RTA_PRIORITY, k->metric);
+
+	batch_next(nl);
+}
+
 void nl_rule(struct nl *nl, enum nl_op op, const struct rule_spec *r)
 {
 	struct nlmsghdr *nlh;

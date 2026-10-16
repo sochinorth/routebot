@@ -652,15 +652,6 @@ out:
  */
 #define FLUSH_CHUNK 1024
 
-/* What a route delete matches on; nl_route ignores the rest for NL_DEL. */
-struct flush_route {
-	uint8_t family;
-	uint8_t plen;
-	uint32_t table;
-	uint32_t metric;
-	uint8_t dst[16];
-};
-
 struct flush_nh {
 	uint32_t id;
 	bool group;
@@ -672,7 +663,7 @@ struct flush_ctx {
 	size_t n_rules, cap_rules;
 	struct flush_nh *nhs;
 	size_t n_nhs, cap_nhs;
-	struct flush_route *routes;	/* FLUSH_CHUNK */
+	struct route_key *routes;	/* FLUSH_CHUNK */
 	size_t n_routes;
 	size_t n_seen;		/* routes in this dump, kept or not */
 	bool oom;
@@ -703,12 +694,18 @@ static int attrs_cb(const struct nlattr *a, void *data)
 	return MNL_CB_OK;
 }
 
+static void put_addr(uint8_t *dst, const struct nlattr *a)
+{
+	if (a && mnl_attr_get_payload_len(a) <= 16)
+		memcpy(dst, mnl_attr_get_payload(a), mnl_attr_get_payload_len(a));
+}
+
 static int flush_route_cb(const struct nlmsghdr *nlh, void *data)
 {
 	struct flush_ctx *fc = data;
 	const struct rtmsg *rtm = mnl_nlmsg_get_payload(nlh);
 	struct attrs t = {};
-	struct flush_route *r;
+	struct route_key *k;
 
 	if (rtm->rtm_protocol != fc->proto ||
 	    (rtm->rtm_family != AF_INET && rtm->rtm_family != AF_INET6))
@@ -717,16 +714,17 @@ static int flush_route_cb(const struct nlmsghdr *nlh, void *data)
 	if (fc->n_seen++ >= FLUSH_CHUNK)
 		return MNL_CB_OK;
 
-	r = &fc->routes[fc->n_routes++];
-	memset(r, 0, sizeof(*r));
+	k = &fc->routes[fc->n_routes++];
+	memset(k, 0, sizeof(*k));
 	mnl_attr_parse(nlh, sizeof(*rtm), attrs_cb, &t);
-	r->family = rtm->rtm_family;
-	r->plen = rtm->rtm_dst_len;
-	r->table = t.tb[RTA_TABLE] ? mnl_attr_get_u32(t.tb[RTA_TABLE]) : rtm->rtm_table;
-	r->metric = t.tb[RTA_PRIORITY] ? mnl_attr_get_u32(t.tb[RTA_PRIORITY]) : 0;
-	if (t.tb[RTA_DST] && mnl_attr_get_payload_len(t.tb[RTA_DST]) <= sizeof(r->dst))
-		memcpy(r->dst, mnl_attr_get_payload(t.tb[RTA_DST]),
-		       mnl_attr_get_payload_len(t.tb[RTA_DST]));
+	k->family = rtm->rtm_family;
+	k->dst_len = rtm->rtm_dst_len;
+	k->src_len = rtm->rtm_src_len;
+	k->tos = rtm->rtm_tos;
+	k->table = t.tb[RTA_TABLE] ? mnl_attr_get_u32(t.tb[RTA_TABLE]) : rtm->rtm_table;
+	k->metric = t.tb[RTA_PRIORITY] ? mnl_attr_get_u32(t.tb[RTA_PRIORITY]) : 0;
+	put_addr(k->dst, t.tb[RTA_DST]);
+	put_addr(k->src, t.tb[RTA_SRC]);
 	return MNL_CB_OK;
 }
 
@@ -803,7 +801,7 @@ static void flush_nexthops(struct nl *nl, const struct flush_ctx *fc, bool group
 /*
  * Delete what's left of the routes with fc's proto, a chunk per dump, and
  * count them. Stops when a dump finds no fewer than the one before: those
- * routes can't be deleted by key (a v6 source prefix, say).
+ * routes can't be deleted by key.
  */
 static int flush_routes(struct nl *nl, struct flush_ctx *fc, size_t *n_deleted,
                         unsigned *errors)
@@ -835,19 +833,8 @@ static int flush_routes(struct nl *nl, struct flush_ctx *fc, size_t *n_deleted,
 		last = fc->n_seen;
 
 		nl_batch_begin(nl);
-		for (size_t i = 0; i < fc->n_routes; i++) {
-			const struct flush_route *k = &fc->routes[i];
-			struct route_spec r = {
-				.family = k->family,
-				.plen = k->plen,
-				.proto = fc->proto,
-				.table = k->table,
-				.metric = k->metric,
-			};
-
-			memcpy(r.dst, k->dst, sizeof(r.dst));
-			nl_route(nl, NL_DEL, &r);
-		}
+		for (size_t i = 0; i < fc->n_routes; i++)
+			nl_route_del(nl, &fc->routes[i], fc->proto);
 		*errors += nl_batch_end(nl);
 		*n_deleted += fc->n_routes;
 		if (fc->n_seen == fc->n_routes)
