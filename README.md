@@ -243,6 +243,63 @@ needs no root, only unprivileged user namespaces.
 sh tests/netns.sh build/routebot
 ```
 
+`tests/gate.sh` is what every change has to pass: a clean ASan+UBSan build
+(warnings counted), unit tests (`tests/unit/test_*.c`, run by ctest, none
+yet), `tests/netns.sh` on the sanitized build with leaks fatal, a clean
+release build benchmarked against `tests/bench/baseline.json`, and a clean
+cross build with the OpenWrt SDK. Point `HOSTDEPS` and `OPENWRT_SDK` at the
+host libraries and the SDK.
+
+### Benchmark
+
+```
+tests/bench/bench.sh build-release/routebot out.json
+python3 -I tests/bench/compare.py tests/bench/baseline.json out.json
+```
+
+`bench.sh` runs an optimized, unsanitized build in a network namespace
+against a synthetic but realistic setup, and measures memory and the cost of
+each unit of work. `genlists.py` generates the lists, the same bytes every
+time: rule `big` (group `pool`, 3 veths with weights 1,2,1, gateways from
+main, 512 buckets) with ~150k IPv4 and ~20k IPv6 prefixes in 3 files, rule
+`asn` (group `warp`, a NOARP dummy) with 4.5k prefixes of which 5% are also
+in `big`, rule `misc` (group `wan`, a veth) over 10 files of 500, and group
+`pool2` (2 dummies) without rules. The lists carry duplicates, host bits,
+invalid lines, comments and stray whitespace. There are no probes: they need
+far ends and are timing-dependent. A private `ubusd` stands in for OpenWrt's,
+without netifd.
+
+Memory (VmRSS, RssAnon, VmHWM, and the live heap) is sampled at `startup`,
+`after_events`, `after_reload` (one no-op reload), `after_10_reloads` and at
+the `end`. Units, each repeated `BENCH_N` times (50), report allocations,
+bytes allocated and CPU per unit:
+
+| unit | what happens |
+|---|---|
+| `startup` | exec until idle after "running" (once) |
+| `link_noop` | an unrelated dummy link is created and deleted |
+| `member_flip` | a `pool` member loses its default routes and gets them back: group replace, no prefix route touched |
+| `blackhole_flip` | `wan` loses its default routes and gets them back: its ~5k prefixes are rewritten twice |
+| `reload_noop` | SIGHUP, nothing changed |
+| `reload_small` | SIGHUP after a misc file changed by 100 lines each way |
+
+Allocations are counted by `mallocstat.c`, an `LD_PRELOAD` shim given to
+routebot alone (it drops itself from the environment at start) that keeps its
+counters in a shared file. After each step the bench waits until routebot is
+idle: counters and CPU time unchanged for 300 ms, routebot in `epoll_wait`,
+no signal pending and no unread netlink data. `validate.sh` cross-checks the
+shim against glibc's mtrace and strace and lists the big allocations with
+file:line.
+
+`compare.py` fails on a broken run, a different workload, or a regression of
+more than 10% in memory (per phase) or in allocations or bytes per unit,
+ignoring regressions below 64 KiB, 2 allocations or 1 KiB per unit. CPU and
+wall time are shown, never gated: they are noisy. The numbers come from
+glibc on the build host, not musl on a router: absolute RSS differs there
+(glibc's `qsort` allocates a temporary copy of the array, musl's doesn't, and
+the allocators retain memory differently), so compare runs with each other,
+not with a router.
+
 ## License
 
 MIT

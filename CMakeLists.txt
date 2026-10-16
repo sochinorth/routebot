@@ -47,3 +47,27 @@ if(WITH_UBUS)
 endif()
 
 install(TARGETS routebot RUNTIME DESTINATION sbin)
+
+# Unit tests: every tests/unit/test_*.c becomes one ctest, linked with all of
+# src/ but main.c (a test supplies log_level and log_msg itself). Absent
+# from the OpenWrt package build, which only copies src/.
+option(ROUTEBOT_UNIT_TESTS "Build and register tests/unit/test_*.c" OFF)
+if(ROUTEBOT_UNIT_TESTS)
+	enable_testing()
+	file(GLOB ROUTEBOT_UNIT_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/test_*.c)
+	get_target_property(ROUTEBOT_SOURCES routebot SOURCES)
+	list(REMOVE_ITEM ROUTEBOT_SOURCES src/main.c)
+	get_target_property(ROUTEBOT_INCLUDES routebot INCLUDE_DIRECTORIES)
+	get_target_property(ROUTEBOT_LIBS routebot LINK_LIBRARIES)
+	get_target_property(ROUTEBOT_DEFS routebot COMPILE_DEFINITIONS)
+	foreach(src ${ROUTEBOT_UNIT_SOURCES})
+		get_filename_component(name ${src} NAME_WE)
+		add_executable(${name} ${src} ${ROUTEBOT_SOURCES})
+		target_include_directories(${name} PRIVATE src ${ROUTEBOT_INCLUDES})
+		target_link_libraries(${name} PRIVATE ${ROUTEBOT_LIBS})
+		if(ROUTEBOT_DEFS)
+			target_compile_definitions(${name} PRIVATE ${ROUTEBOT_DEFS})
+		endif()
+		add_test(NAME ${name} COMMAND ${name})
+	endforeach()
+endif()
