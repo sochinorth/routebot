@@ -1047,7 +1047,7 @@ static int scan_routes(const struct diff *d, struct scan *sc)
 
 /*
  * Requests for routes known by dumping alone: every route with proto that
- * pred() holds for gets op, queued right from the dump's callback (dumps
+ * pred() holds for (all, if NULL) gets op, queued right from the dump's callback (dumps
  * have their own socket: the batch goes out between two of its datagrams,
  * and the kernel's dump goes on from where it was, routes gone or not). A
  * request that succeeds makes pred() false (the route is gone, or a
@@ -1070,7 +1070,8 @@ static int sweep_cb(const struct nlmsghdr *nlh, void *data)
 	struct route_key key;
 	struct kroute k;
 
-	if (nl_parse_route(nlh, &k) || k.r.proto != sw->proto || !sw->pred(&k, sw->data))
+	if (nl_parse_route(nlh, &k) || k.r.proto != sw->proto ||
+	    (sw->pred && !sw->pred(&k, sw->data)))
 		return MNL_CB_OK;
 	kroute_key(&k, &key);
 	nl_route_key(sw->nl, sw->op, &key, sw->proto);
@@ -1627,121 +1628,62 @@ int sync_apply(struct sync *s, struct nl *nl, const struct world *prev,
 
 /* --- flush --- */
 
-struct flush_ctx {
-	uint8_t proto;
-	struct rule_spec *rules;
-	size_t n_rules, cap_rules;
-	struct nexthop_spec *nhs;	/* id and n_grp only */
-	size_t n_nhs, cap_nhs;
-	bool oom;
-};
-
-static int flush_rule_cb(const struct nlmsghdr *nlh, void *data)
+/* Delete k's nexthops that are groups, or that aren't. */
+static void flush_nexthops(struct nl *nl, const struct kstate *k, bool groups)
 {
-	struct flush_ctx *fc = data;
-	struct rule_spec r;
-
-	if (nl_parse_rule(nlh, &r) < 0 || r.proto != fc->proto)
-		return MNL_CB_OK;
-	if (reserve(&fc->rules, &fc->cap_rules, fc->n_rules + 1, sizeof(r))) {
-		fc->oom = true;
-		return MNL_CB_ERROR;
-	}
-	fc->rules[fc->n_rules++] = r;
-	return MNL_CB_OK;
-}
-
-static int flush_nh_cb(const struct nlmsghdr *nlh, void *data)
-{
-	struct flush_ctx *fc = data;
-	struct nexthop_spec n;
-
-	if (nl_parse_nexthop(nlh, &n) || n.proto != fc->proto)
-		return MNL_CB_OK;
-	if (reserve(&fc->nhs, &fc->cap_nhs, fc->n_nhs + 1, sizeof(n))) {
-		fc->oom = true;
-		return MNL_CB_ERROR;
-	}
-	fc->nhs[fc->n_nhs++] = (struct nexthop_spec){ .id = n.id, .n_grp = n.n_grp };
-	return MNL_CB_OK;
-}
-
-/* Delete fc's nexthops that are groups, or that aren't. */
-static void flush_nexthops(struct nl *nl, const struct flush_ctx *fc, bool groups)
-{
-	for (size_t i = 0; i < fc->n_nhs; i++)
-		if (!!fc->nhs[i].n_grp == groups)
-			nl_nexthop(nl, NL_DEL, &fc->nhs[i]);
-}
-
-static bool pred_all(const struct kroute *k, const void *data)
-{
-	return true;
+	for (size_t i = 0; i < k->n_nh; i++)
+		if (!!k->nh[i].n_grp == groups)
+			nl_nexthop(nl, NL_DEL, &k->nh[i]);
 }
 
 /*
  * Rules first, then the groups: the kernel deletes every route on a deleted
  * nexthop by itself, which is nearly all of them, much faster than route
- * by route. What's left are the group tables' blackholes and the probe
- * routes, swept so memory stays bounded however many there are. Then the members and blackhole nexthops, no longer in any group,
- * and any route still on them.
+ * by route. The rest are swept. Then the members and blackholes, no longer
+ * in any group, and any route still on them.
  */
 int sync_flush(struct nl *nl, uint8_t proto)
 {
-	struct flush_ctx fc = { .proto = proto };
-	struct sweep sw = { .nl = nl, .proto = proto, .op = NL_DEL, .pred = pred_all };
-	size_t n_routes = 0, n_left = 0, n_more;
+	struct kscope sc = { .protos = { proto }, .n_protos = 1 };
+	struct sweep sw = { .nl = nl, .proto = proto, .op = NL_DEL };
+	struct kstate k = {};
+	size_t n_routes = 0, n_left = 0, n_more = 0;
 	unsigned errors;
-	int ret;
+	int ret = kstate_observe(nl, &sc, &k);
 
-	ret = nl_dump_rules(nl, flush_rule_cb, &fc);
 	if (ret)
 		goto fail;
-
-	/* nothing to flush on kernels without nexthop objects */
-	ret = nl_dump_nexthops(nl, flush_nh_cb, &fc);
-	if (ret && ret != -EOPNOTSUPP)
-		goto fail;
-
 	nl_batch_begin(nl);
-	for (size_t i = 0; i < fc.n_rules; i++)
-		nl_rule(nl, NL_DEL, &fc.rules[i]);
-	flush_nexthops(nl, &fc, true);
+	for (size_t i = 0; i < k.n_rules; i++)
+		nl_rule(nl, NL_DEL, &k.rules[i]);
+	flush_nexthops(nl, &k, true);
 	errors = nl_batch_end(nl);
 
 	ret = sweep_run(&sw, &n_routes, &n_left, &errors);
 	if (ret)
 		goto fail;
-
 	nl_batch_begin(nl);
-	flush_nexthops(nl, &fc, false);
+	flush_nexthops(nl, &k, false);
 	errors += nl_batch_end(nl);
 
 	/* some may have been on the members */
-	if (n_left) {
-		ret = sweep_run(&sw, &n_more, &n_left, &errors);
-		if (ret)
-			goto fail;
-		n_routes += n_more;
-	}
+	if (n_left && (ret = sweep_run(&sw, &n_more, &n_left, &errors)))
+		goto fail;
+	n_routes += n_more;
 	if (n_left) {
 		warn("flush: %zu routes with proto %u left, can't delete them", n_left, proto);
 		errors++;
 	}
-
-	if (fc.n_rules || fc.n_nhs || n_routes)
+	if (k.n_rules || k.n_nh || n_routes)
 		info("flush: removed %zu rules, %zu nexthops and the routes on them, "
-		     "%zu other routes with proto %u%s", fc.n_rules, fc.n_nhs, n_routes, proto,
+		     "%zu other routes with proto %u%s", k.n_rules, k.n_nh, n_routes, proto,
 		     errors ? " (with errors)" : "");
-
-	free(fc.rules);
-	free(fc.nhs);
+	kstate_free(&k);
 	return errors ? -EIO : 0;
 
 fail:
-	err("flush: dump failed: %s", fc.oom ? "out of memory" : strerror(-ret));
-	free(fc.rules);
-	free(fc.nhs);
+	err("flush: dump failed: %s", strerror(-ret));
+	kstate_free(&k);
 	return ret;
 }
 
