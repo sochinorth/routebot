@@ -6,16 +6,6 @@
 
 #include <libmnl/libmnl.h>
 
-/* A request the kernel refused (an unexpected error), as far as it says. */
-struct nl_refused {
-	uint16_t type;		/* RTM_NEWNEXTHOP, RTM_NEWROUTE, ... */
-	uint8_t family;		/* the request's */
-	uint32_t id;		/* nexthops: NHA_ID */
-	uint32_t table;		/* routes: the table */
-	uint32_t metric;	/* routes: RTA_PRIORITY, 0 if none */
-	int error;		/* errno */
-};
-
 struct nl {
 	struct mnl_socket *req;		/* writes, blocking */
 	/*
@@ -30,8 +20,8 @@ struct nl {
 	struct mnl_nlmsg_batch *batch;
 	unsigned n_errors;		/* unexpected errors since nl_batch_begin() */
 	unsigned n_expected;		/* expected ones: nothing to delete, rule exists */
-	/* the n_errors whose request came back whole (all, memory allowing) */
-	struct nl_refused *refused;
+	/* ids of the nexthop sets among n_errors, but ENOENT (memory allowing) */
+	uint32_t *refused;
 	unsigned n_refused, cap_refused;
 };
 

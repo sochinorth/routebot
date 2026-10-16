@@ -514,15 +514,18 @@ static void describe_req(const struct nlmsghdr *req, bool capped, char *buf, siz
 	}
 }
 
-/* What req was about, for nl->refused. */
+/* A nexthop set the kernel refused, for nl->refused. */
 static void note_refused(struct nl *nl, const struct nlmsghdr *req, int error)
 {
-	struct ptb t = {};
-	struct nl_refused *r;
+	uint32_t id = 0;
+	struct ptb t;
 
+	if (req->nlmsg_type != RTM_NEWNEXTHOP || error == ENOENT ||
+	    !ptb_parse(req, sizeof(struct nhmsg), &t) || !ptb_u32(&t, NHA_ID, &id) || !id)
+		return;
 	if (nl->n_refused == nl->cap_refused) {
 		unsigned cap = nl->cap_refused ? 2 * nl->cap_refused : 32;
-		struct nl_refused *nr = realloc(nl->refused, cap * sizeof(*nr));
+		uint32_t *nr = realloc(nl->refused, cap * sizeof(*nr));
 
 		/* unknown then: an error that says nothing of what failed */
 		if (!nr)
@@ -530,26 +533,7 @@ static void note_refused(struct nl *nl, const struct nlmsghdr *req, int error)
 		nl->refused = nr;
 		nl->cap_refused = cap;
 	}
-	r = &nl->refused[nl->n_refused++];
-
-	memset(r, 0, sizeof(*r));
-	r->type = req->nlmsg_type;
-	r->error = error;
-	if (req->nlmsg_type == RTM_NEWNEXTHOP || req->nlmsg_type == RTM_DELNEXTHOP) {
-		const struct nhmsg *nhm = mnl_nlmsg_get_payload(req);
-
-		r->family = nhm->nh_family;
-		mnl_attr_parse(req, sizeof(*nhm), ptb_cb, &t);
-		ptb_u32(&t, NHA_ID, &r->id);
-	} else if (req->nlmsg_type == RTM_NEWROUTE || req->nlmsg_type == RTM_DELROUTE) {
-		const struct rtmsg *rtm = mnl_nlmsg_get_payload(req);
-
-		r->family = rtm->rtm_family;
-		r->table = rtm->rtm_table;
-		mnl_attr_parse(req, sizeof(*rtm), ptb_cb, &t);
-		ptb_u32(&t, RTA_TABLE, &r->table);
-		ptb_u32(&t, RTA_PRIORITY, &r->metric);
-	}
+	nl->refused[nl->n_refused++] = id;
 }
 
 static void handle_error(struct nl *nl, const struct nlmsghdr *nlh)

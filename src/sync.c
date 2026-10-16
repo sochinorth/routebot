@@ -733,14 +733,12 @@ static unsigned batch_end(struct diff *d)
 
 	d->st->errors += errors;
 	for (unsigned i = 0; i < nl->n_refused; i++) {
-		const struct nl_refused *r = &nl->refused[i];
-		const struct nexthop_spec *n = plan_nh(d->pw, r->id);
+		const struct nexthop_spec *n = plan_nh(d->pw, nl->refused[i]);
 		struct owner o;
 
-		if (r->type == RTM_NEWNEXTHOP && r->error != ENOENT && n && !n->n_grp &&
-		    !n->blackhole && owner_of(d->wc, r->id, &o)) {
+		if (n && !n->n_grp && !n->blackhole && owner_of(d->wc, n->id, &o)) {
 			warn("%s: kernel refused its %s nexthop, left out", o.name, fam_name(o.f));
-			if (!idset_add(&d->s->refused, r->id))
+			if (!idset_add(&d->s->refused, n->id))
 				known++;
 		}
 	}
