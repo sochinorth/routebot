@@ -98,3 +98,10 @@ kstate() {
     ip rule | grep 'proto 233' || true
     ip -6 rule | grep 'proto 233' || true
 }
+
+# the log hasn't said $1 since the last mark
+not_logged() {
+    _said=$(tail -n +"$((MARK + 1))" "$LOG" | grep -F -- "$1" || true)
+    if [ -n "$_said" ]; then fail "log said: $1"; echo "$_said" | sed 's/^/     | /'
+    else pass "log didn't say: $1"; fi
+}

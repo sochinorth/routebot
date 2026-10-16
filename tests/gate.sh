@@ -111,6 +111,7 @@ if [ "$_rc" != 0 ]; then
 	cat "$B-asan/netns.out"
 	die "3. netns.sh failed"
 fi
+SHOW_LOG=1 "$ROOT/tests/flush.sh" "$B-asan/routebot" >> "$B-asan/netns.out" 2>&1 || { cat "$B-asan/netns.out"; die "3. flush.sh failed"; }
 if grep -q "Sanitizer\|runtime error:" "$B-asan/netns.out"; then
 	grep -B2 -A20 "Sanitizer\|runtime error:" "$B-asan/netns.out"
 	die "3. sanitizer reports in the netns.sh log"
