@@ -15,6 +15,7 @@ struct nl {
 	char *batch_buf;
 	struct mnl_nlmsg_batch *batch;
 	unsigned n_errors;		/* unexpected errors since nl_batch_begin() */
+	unsigned n_expected;		/* expected ones: nothing to delete, rule exists */
 };
 
 struct route_spec {

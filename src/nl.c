@@ -288,8 +288,12 @@ static void handle_error(struct nl *nl, const struct nlmsghdr *nlh)
 	char desc[128];
 	int error = -e->error;
 
-	if (!error || error_expected(e->msg.nlmsg_type, error))
+	if (!error)
 		return;
+	if (error_expected(e->msg.nlmsg_type, error)) {
+		nl->n_expected++;
+		return;
+	}
 
 	if (nl->n_errors++ >= MAX_LOGGED_ERRORS)
 		return;
@@ -373,7 +377,7 @@ static void batch_next(struct nl *nl)
 
 void nl_batch_begin(struct nl *nl)
 {
-	nl->n_errors = 0;
+	nl->n_errors = nl->n_expected = 0;
 	mnl_nlmsg_batch_reset(nl->batch);
 }
 
