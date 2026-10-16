@@ -880,23 +880,15 @@ static bool prefix_changed(const struct diff *d, int f, uint16_t orule, uint16_t
 	return rule_nh(d->pc, orule, f) != nnh || idset_has(&d->s->reset, nnh);
 }
 
-/* Shared lists: set what changed, after checking per rule whether anything did. */
-static void prefixes_set_shared(const struct diff *d, int f)
+/* Shared lists, and no rule's group nexthop changed: nothing to set. */
+static bool shared_unchanged(const struct diff *d, int f)
 {
-	size_t r, n = prefixes_n(d->wc, f);
-	uint16_t rule;
-
-	for (r = 0; r < d->wc->n_rules; r++)
+	if (!prefixes_shared(d->pc, d->wc, f))
+		return false;
+	for (size_t r = 0; r < d->wc->n_rules; r++)
 		if (prefix_changed(d, f, r, r))
-			break;
-	if (r == d->wc->n_rules)
-		return;
-
-	for (size_t i = n; i-- > 0;) {
-		prefix_at(d->wc, f, i, &rule);
-		if (prefix_changed(d, f, rule, rule))
-			prefix_send(d, NL_SET, d->wc, f, i);
-	}
+			return false;
+	return true;
 }
 
 /* Orders entry i of a and entry j of b, both family f, by (addr, plen). */
@@ -920,10 +912,8 @@ static void prefixes_set(const struct diff *d)
 		size_t i = comparable ? prefixes_n(oc, f) : 0, j = prefixes_n(nc, f);
 		uint16_t ro = 0, rn = 0;
 
-		if (prefixes_shared(oc, nc, f)) {
-			prefixes_set_shared(d, f);
+		if (shared_unchanged(d, f))
 			continue;
-		}
 
 		while (j > 0) {
 			int cmp = i > 0 ? prefix_cmp(oc, i - 1, nc, j - 1, f, &ro, &rn) : -1;
