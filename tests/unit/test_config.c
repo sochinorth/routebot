@@ -6,6 +6,7 @@
  * ROUTEBOT_GOLDEN_UPDATE=1 rewrites the golden file instead of comparing.
  * On a mismatch the transcript is left in ./test_config.out.
  */
+#include <arpa/inet.h>
 #include <errno.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -36,6 +37,18 @@ static void die(const char *what)
 {
 	fprintf(stderr, "test_config: %s: %s\n", what, strerror(errno));
 	exit(2);
+}
+
+/* Formats prefix i in walk order (v4 first) into buf, sets *rule, returns its group. */
+static size_t config_prefix(const struct config *c, size_t i, char *buf, size_t *rule)
+{
+	bool v6 = i >= c->n_p4;
+	const uint8_t *addr = v6 ? c->p6[i - c->n_p4].addr : c->p4[i].addr;
+
+	inet_ntop(v6 ? AF_INET6 : AF_INET, addr, buf, INET6_ADDRSTRLEN);
+	sprintf(buf + strlen(buf), "/%u", addr[v6 ? 16 : 4]);
+	*rule = v6 ? c->p6[i - c->n_p4].rule : c->p4[i].rule;
+	return c->rule_group[*rule];
 }
 
 static void append(const char *s, size_t n)
@@ -189,11 +202,11 @@ static void load(const char *cfg)
 		outf("-> load failed\n");
 		return;
 	}
-	n = config_n_prefixes(c);
+	n = c->n_p4 + c->n_p6;
 	outf("-> %zu prefixes\n", n);
 	if (n <= 400) {
 		for (size_t i = 0; i < n; i++) {
-			char buf[PREFIX_STRLEN];
+			char buf[INET6_ADDRSTRLEN + 4];
 			size_t rule, g = config_prefix(c, i, buf, &rule);
 
 			outf("  %s %s r%zu\n", buf, c->groups[g].name, rule);
@@ -203,7 +216,7 @@ static void load(const char *cfg)
 		uint64_t h = 0xcbf29ce484222325ULL;
 
 		for (size_t i = 0; i < n; i++) {
-			char buf[PREFIX_STRLEN], line[128];
+			char buf[INET6_ADDRSTRLEN + 4], line[128];
 			size_t rule, g = config_prefix(c, i, buf, &rule);
 
 			snprintf(line, sizeof(line), "  %s %s r%zu\n", buf, c->groups[g].name, rule);
