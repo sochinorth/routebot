@@ -2,70 +2,71 @@
  "memory": {
   "after_10_reloads": {
    "RssAnon_kB": 12224,
-   "RssFile_kB": 2136,
+   "RssFile_kB": 2132,
    "RssShmem_kB": 0,
    "VmData_kB": 15696,
-   "VmHWM_kB": 14360,
-   "VmRSS_kB": 14360,
+   "VmHWM_kB": 14356,
+   "VmRSS_kB": 14356,
    "VmSize_kB": 18556,
    "heap_live_kB": 5768,
    "heap_peak_kB": 15384
   },
   "after_events": {
    "RssAnon_kB": 4276,
-   "RssFile_kB": 2136,
+   "RssFile_kB": 2132,
    "RssShmem_kB": 0,
    "VmData_kB": 6100,
-   "VmHWM_kB": 10072,
-   "VmRSS_kB": 6412,
+   "VmHWM_kB": 10068,
+   "VmRSS_kB": 6408,
    "VmSize_kB": 8960,
    "heap_live_kB": 5772,
    "heap_peak_kB": 9618
   },
   "after_reload": {
    "RssAnon_kB": 8248,
-   "RssFile_kB": 2136,
+   "RssFile_kB": 2132,
    "RssShmem_kB": 0,
    "VmData_kB": 10324,
-   "VmHWM_kB": 14320,
-   "VmRSS_kB": 10384,
+   "VmHWM_kB": 14316,
+   "VmRSS_kB": 10380,
    "VmSize_kB": 13184,
    "heap_live_kB": 5772,
    "heap_peak_kB": 15384
   },
   "end": {
-   "RssAnon_kB": 12232,
-   "RssFile_kB": 2136,
+   "RssAnon_kB": 12248,
+   "RssFile_kB": 2132,
    "RssShmem_kB": 0,
    "VmData_kB": 15700,
-   "VmHWM_kB": 14368,
-   "VmRSS_kB": 14368,
+   "VmHWM_kB": 14380,
+   "VmRSS_kB": 14380,
    "VmSize_kB": 18560,
    "heap_live_kB": 5768,
    "heap_peak_kB": 15384
   },
   "startup": {
    "RssAnon_kB": 4276,
-   "RssFile_kB": 2136,
+   "RssFile_kB": 2132,
    "RssShmem_kB": 0,
    "VmData_kB": 6100,
-   "VmHWM_kB": 10072,
-   "VmRSS_kB": 6412,
+   "VmHWM_kB": 10068,
+   "VmRSS_kB": 6408,
    "VmSize_kB": 8960,
    "heap_live_kB": 5772,
    "heap_peak_kB": 9618
   }
  },
  "meta": {
-  "binary": "/home/sochinorth/routebot/.claude/worktrees/agent-addf44964e9ecd472/build-trunk/build-gate-release/routebot",
-  "binary_sha256": "3d0e0495ac3c578dad6a12c5fb7985cb86b4944a9556f0842a3130cb43232f90",
-  "date": "2026-10-16T05:19:51Z",
+  "binary": "/tmp/claude-1000/-home-sochinorth-routebot/eaf07754-33fd-46e8-a880-432a7811e076/scratchpad/trunk/build-gate-release/routebot",
+  "binary_sha256": "3742f7724f35e699e51d32e92154c0e1181e438a27976f998590db7dd8bdca2e",
+  "date": "2026-10-16T05:46:47Z",
   "exit_status": "0",
   "kernel": "6.18.40.1-microsoft-standard-WSL2",
   "libc": "glibc 2.44",
   "log_samples": {
    "blackhole_flip_in": "sync (link event): 5002 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted",
    "blackhole_flip_out": "sync (link event): 5002 routes set, 0 deleted, 0 nexthops set, 4 deleted, 0 rules added, 0 deleted",
+   "link_flap": "sync (link flap): 179283 routes set, 0 deleted, 22 nexthops set, 0 deleted, 10 rules added, 0 deleted",
    "member_flip_in": "sync (link event): 0 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted",
    "member_flip_out": "sync (link event): 0 routes set, 0 deleted, 2 nexthops set, 2 deleted, 0 rules added, 0 deleted",
    "reload_small": "sync (reload): 100 routes set, 100 deleted, 0 nexthops set, 0 deleted, 0 rules added, 0 deleted",
@@ -90,6 +91,7 @@
    "link_noop",
    "member_flip",
    "blackhole_flip",
+   "link_flap",
    "reload_noop",
    "reload_small"
   ]
@@ -105,14 +107,26 @@
   "blackhole_flip": {
    "allocs": 44.0,
    "bytes": 36796.0,
-   "cpu_ms": 22.4,
+   "cpu_ms": 23.4,
    "frees": 44.0,
    "n": 50,
    "reallocs": 2.0,
-   "sched_cpu_ms": 22.3771362,
-   "sys_ms": 17.2,
-   "user_ms": 5.2,
-   "wall_ms": 259.31419372558594
+   "sched_cpu_ms": 23.36214552,
+   "sys_ms": 20.0,
+   "user_ms": 3.4,
+   "wall_ms": 260.349383354187
+  },
+  "link_flap": {
+   "allocs": 34.0,
+   "bytes": 28154.0,
+   "cpu_ms": 474.0,
+   "frees": 34.0,
+   "n": 50,
+   "reallocs": 2.0,
+   "sched_cpu_ms": 474.14333048000003,
+   "sys_ms": 467.2,
+   "user_ms": 6.8,
+   "wall_ms": 567.2876739501953
   },
   "link_noop": {
    "allocs": 21.0,
@@ -121,58 +135,58 @@
    "frees": 21.0,
    "n": 50,
    "reallocs": 1.0,
-   "sched_cpu_ms": 0.059934320000000006,
+   "sched_cpu_ms": 0.0608494,
    "sys_ms": 0.0,
    "user_ms": 0.0,
-   "wall_ms": 60.506324768066406
+   "wall_ms": 94.77455139160156
   },
   "member_flip": {
    "allocs": 44.0,
    "bytes": 36804.0,
-   "cpu_ms": 236.2,
+   "cpu_ms": 240.0,
    "frees": 44.0,
    "n": 50,
    "reallocs": 2.0,
-   "sched_cpu_ms": 236.28860002000002,
-   "sys_ms": 231.6,
-   "user_ms": 4.6,
-   "wall_ms": 466.87675952911377
+   "sched_cpu_ms": 239.89573177999998,
+   "sys_ms": 235.6,
+   "user_ms": 4.4,
+   "wall_ms": 468.27964305877686
   },
   "reload_noop": {
    "allocs": 201.0,
    "bytes": 15732711.0,
-   "cpu_ms": 31.6,
+   "cpu_ms": 32.4,
    "frees": 201.0,
    "n": 50,
    "reallocs": 20.0,
-   "sched_cpu_ms": 31.47517566,
-   "sys_ms": 1.8,
-   "user_ms": 29.8,
-   "wall_ms": 123.21840763092041
+   "sched_cpu_ms": 32.39808128,
+   "sys_ms": 1.4,
+   "user_ms": 31.0,
+   "wall_ms": 124.09954071044922
   },
   "reload_small": {
    "allocs": 201.0,
    "bytes": 15732711.0,
-   "cpu_ms": 31.6,
+   "cpu_ms": 32.4,
    "frees": 201.0,
    "n": 50,
    "reallocs": 20.0,
-   "sched_cpu_ms": 31.82788604,
-   "sys_ms": 1.2,
-   "user_ms": 30.4,
-   "wall_ms": 123.89245510101318
+   "sched_cpu_ms": 32.23696388,
+   "sys_ms": 1.4,
+   "user_ms": 31.0,
+   "wall_ms": 124.27702903747559
   },
   "startup": {
    "allocs": 232.0,
    "bytes": 15864291.0,
-   "cpu_ms": 360.0,
+   "cpu_ms": 490.0,
    "frees": 191.0,
    "n": 1,
    "reallocs": 38.0,
-   "sched_cpu_ms": 365.007588,
-   "sys_ms": 330.0,
-   "user_ms": 30.0,
-   "wall_ms": 434.4627857208252
+   "sched_cpu_ms": 500.230575,
+   "sys_ms": 450.0,
+   "user_ms": 40.0,
+   "wall_ms": 644.0105438232422
   }
  },
  "workload": {

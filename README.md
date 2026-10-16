@@ -280,6 +280,7 @@ bytes allocated and CPU per unit:
 | `link_noop` | an unrelated dummy link is created and deleted |
 | `member_flip` | a `pool` member loses its default routes and gets them back: group replace, no prefix route touched |
 | `blackhole_flip` | `wan` loses its default routes and gets them back: its ~5k prefixes are rewritten twice |
+| `link_flap` | a `pool` member goes down and up in one batch: every route, nexthop and rule is re-sent |
 | `reload_noop` | SIGHUP, nothing changed |
 | `reload_small` | SIGHUP after a misc file changed by 100 lines each way |
 

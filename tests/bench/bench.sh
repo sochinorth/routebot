@@ -38,7 +38,7 @@ expect() { wait_log "$1" >> "$CHECKS"; }
 
 . "$HERE/setup.sh"
 
-UNITS="link_noop member_flip blackhole_flip reload_noop reload_small"
+UNITS="link_noop member_flip blackhole_flip link_flap reload_noop reload_small"
 PHASES="startup after_events after_reload after_10_reloads end"
 
 finish() {
@@ -153,6 +153,26 @@ unit_blackhole_flip() {
 	quiesce unit:blackhole_flip "$S"
 }
 
+# p2 goes down and comes back in one batch, which also takes its v6 address
+# and default routes; the kernel deleted its nexthops, dropping them from
+# pool. Everything is re-sent here ("sync (link flap)").
+unit_link_flap() {
+	S=$(now)
+	frozen sh -c 'ip link set p2 down; ip link set p2 up
+		ip -6 addr add 2001:db8:1:2::2/64 dev p2 nodad
+		ip route add default via 10.1.2.1 dev p2 metric 102
+		ip -6 route add default via 2001:db8:1:2::1 dev p2 metric 102'
+	expect "link flap on p2, re-syncing"
+	expect "sync (link "
+	[ "$1" = 0 ] && sample link_flap
+	quiesce unit:link_flap "$S"
+	# p2 (10013, 10014) is back in pool (10011, 10012)
+	for _g in "10011 group 10009/10013,2/10017" "10012 group 10010/10014,2/10018"; do
+		ip nexthop show id "${_g%% *}" | grep -q "^id $_g " ||
+			fail "link_flap: want id $_g, got: $(ip nexthop show id "${_g%% *}" 2>&1)"
+	done
+}
+
 reload_noop() {
 	S=$(now); hup
 	expect "config: 4 groups"
@@ -177,6 +197,7 @@ unit_reload_small() {
 run_unit link_noop
 run_unit member_flip
 run_unit blackhole_flip
+run_unit link_flap
 quiesce after_events
 
 say "memory: reloads"
