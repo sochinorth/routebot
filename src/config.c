@@ -152,12 +152,34 @@ static int parse_globals(struct uci_context *ctx, struct uci_section *s, struct 
 	return 0;
 }
 
-static int find_device(const struct config *c, const char *spec)
+int config_find_device(const struct config *c, const char *spec)
 {
-	for (size_t i = 0; i < c->n_devices; i++)
+	for (size_t i = 0; c && i < c->n_devices; i++)
 		if (!strcmp(c->devices[i].spec, spec))
 			return i;
 	return -1;
+}
+
+int config_find_group(const struct config *c, const char *name)
+{
+	for (size_t i = 0; c && i < c->n_groups; i++)
+		if (!strcmp(c->groups[i].name, name))
+			return i;
+	return -1;
+}
+
+bool config_dev_probed(const struct config *c, size_t d)
+{
+	for (size_t g = 0; g < c->n_groups; g++) {
+		const struct cfg_group *grp = &c->groups[g];
+
+		if (!grp->has_probe[0] && !grp->has_probe[1])
+			continue;
+		for (size_t m = 0; m < grp->n_members; m++)
+			if (grp->members[m].dev == d)
+				return true;
+	}
+	return false;
 }
 
 static int add_member(struct config *c, struct cfg_group *g, const char *entry)
@@ -184,7 +206,7 @@ static int add_member(struct config *c, struct cfg_group *g, const char *entry)
 		return -1;
 	}
 
-	idx = find_device(c, spec);
+	idx = config_find_device(c, spec);
 	if (idx < 0) {
 		struct cfg_device *nd;
 
@@ -704,14 +726,6 @@ static int validate(struct config *c, const struct nh_defaults *d)
 	return 0;
 }
 
-static int find_group(const struct config *c, const char *name)
-{
-	for (size_t i = 0; i < c->n_groups; i++)
-		if (!strcmp(c->groups[i].name, name))
-			return i;
-	return -1;
-}
-
 struct config *config_load(const char *path, const struct config *prev)
 {
 	struct uci_context *ctx = NULL;
@@ -788,7 +802,7 @@ struct config *config_load(const char *path, const struct config *prev)
 			c->n_groups++;
 			if (parse_group(ctx, s, c, &ng[c->n_groups - 1]))
 				goto out;
-			if (find_group(c, s->e.name) != (int)c->n_groups - 1) {
+			if (config_find_group(c, s->e.name) != (int)c->n_groups - 1) {
 				err("config: duplicate group '%s'", s->e.name);
 				goto out;
 			}
@@ -822,7 +836,7 @@ struct config *config_load(const char *path, const struct config *prev)
 			goto out;
 		}
 		group = opt_str(ctx, s, "group");
-		idx = group ? find_group(c, group) : -1;
+		idx = group ? config_find_group(c, group) : -1;
 		if (idx < 0) {
 			if (group)
 				err("config: rule '%s': unknown group '%s'", s->e.name, group);

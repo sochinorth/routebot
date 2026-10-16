@@ -145,27 +145,6 @@ static bool snap_eq(const struct snap *a, const struct snap *b)
 	               cfg_member_index(cfg, cfg->n_groups, 0) * sizeof(*a->member_up));
 }
 
-static int find_group(const struct config *cfg, const char *name)
-{
-	for (size_t g = 0; cfg && g < cfg->n_groups; g++)
-		if (!strcmp(cfg->groups[g].name, name))
-			return g;
-	return -1;
-}
-
-static int find_device(const struct config *cfg, const char *spec)
-{
-	for (size_t d = 0; cfg && d < cfg->n_devices; d++)
-		if (!strcmp(cfg->devices[d].spec, spec))
-			return d;
-	return -1;
-}
-
-static const char *fam_name(int f)
-{
-	return f ? "v6" : "v4";
-}
-
 /* "v4 via a, b" or "v4 blackholed" */
 static void fmt_group(const struct snap *s, size_t g, int f, char *buf, size_t len)
 {
@@ -189,7 +168,7 @@ static void log_changes(const struct snap *old, const struct snap *cur)
 	const struct config *cfg = cur->cfg;
 
 	for (size_t d = 0; d < cfg->n_devices; d++) {
-		int od = find_device(old->cfg, cfg->devices[d].spec);
+		int od = config_find_device(old->cfg, cfg->devices[d].spec);
 
 		for (int f = 0; f < 2; f++) {
 			const struct ifrender *r = &cur->ifs[d].fam[f];
@@ -210,7 +189,7 @@ static void log_changes(const struct snap *old, const struct snap *cur)
 	}
 
 	for (size_t g = 0; g < cfg->n_groups; g++) {
-		int og = find_group(old->cfg, cfg->groups[g].name);
+		int og = config_find_group(old->cfg, cfg->groups[g].name);
 
 		for (int f = 0; f < 2; f++) {
 			char now[640], was[640];
@@ -242,20 +221,6 @@ static int read_rp_filter(const char *dev)
 	return v;
 }
 
-static bool device_probed(const struct config *cfg, size_t d)
-{
-	for (size_t g = 0; g < cfg->n_groups; g++) {
-		const struct cfg_group *grp = &cfg->groups[g];
-
-		if (!grp->has_probe[0] && !grp->has_probe[1])
-			continue;
-		for (size_t m = 0; m < grp->n_members; m++)
-			if (grp->members[m].dev == d)
-				return true;
-	}
-	return false;
-}
-
 /*
  * Probe replies come from the probe target, whose unmarked reverse path
  * usually points elsewhere (or at a blackhole): rp_filter drops them.
@@ -267,7 +232,7 @@ static void check_rp_filter(const struct snap *old, const struct snap *cur)
 		const char *dev = cur->netdev[d];
 		int all, v;
 
-		if (!cur->ifs[d].fam[0].usable || !device_probed(cur->cfg, d))
+		if (!cur->ifs[d].fam[0].usable || !config_dev_probed(cur->cfg, d))
 			continue;
 		if (old->cfg == cur->cfg && old->ifs[d].fam[0].usable &&
 		    !strcmp(old->netdev[d], dev))

@@ -17,11 +17,6 @@ static const int families[2] = { AF_INET, AF_INET6 };
 /* what the kernel makes of a v6 route without a metric */
 #define METRIC_V6 1024
 
-static const char *fam_name(int f)
-{
-	return f ? "v6" : "v4";
-}
-
 /* Make room for n elements of size bytes in *p. */
 static int reserve(void *p, size_t *cap, size_t n, size_t size)
 {
@@ -62,21 +57,6 @@ static bool any_probe(const struct config *c)
 	for (size_t g = 0; g < c->n_groups; g++)
 		if (c->groups[g].has_probe[0] || c->groups[g].has_probe[1])
 			return true;
-	return false;
-}
-
-/* Is device d a member of any group, of any probed group if probed? */
-static bool dev_member(const struct config *c, size_t d, bool probed)
-{
-	for (size_t g = 0; g < c->n_groups; g++) {
-		const struct cfg_group *grp = &c->groups[g];
-
-		if (probed && !grp->has_probe[0] && !grp->has_probe[1])
-			continue;
-		for (size_t m = 0; m < grp->n_members; m++)
-			if (grp->members[m].dev == d)
-				return true;
-	}
 	return false;
 }
 
@@ -132,9 +112,8 @@ static void gen_members(const struct world *w, struct plan *p)
 			.blackhole = true,
 		};
 
+	/* every device is some group's member */
 	for (size_t d = 0; d < c->n_devices; d++) {
-		if (!dev_member(c, d, false))
-			continue;
 		for (int f = 0; f < 2; f++) {
 			const struct ifrender *ir = &w->ifs[d].fam[f];
 			struct nexthop_spec *n;
@@ -222,7 +201,7 @@ static void gen_small(const struct world *w, struct plan *p)
 
 	/* one route per link, probe health aside: dead members keep being probed */
 	for (size_t d = 0; d < c->n_devices; d++) {
-		if (!dev_member(c, d, true))
+		if (!config_dev_probed(c, d))
 			continue;
 		for (int f = 0; f < 2; f++) {
 			const struct ifrender *ir = &w->ifs[d].fam[f];
@@ -295,21 +274,14 @@ static void plan_free(struct plan *p)
 static int plan_build(const struct world *w, struct plan *p)
 {
 	const struct config *c = w->cfg;
-	size_t nm, ns, ng = c ? c->n_groups : 0;
+	size_t nd = c ? c->n_devices : 0, ng = c ? c->n_groups : 0;
 
 	p->n_members = p->n_groups = p->n_small = p->n_rules = 0;
 	if (!c)
 		return 0;
-
-	nm = ng ? 2 : 0;
-	ns = 4 * ng;
-	for (size_t d = 0; d < c->n_devices; d++) {
-		nm += dev_member(c, d, false) ? 2 : 0;
-		ns += dev_member(c, d, true) ? 2 : 0;
-	}
-	if (reserve(&p->members, &p->cap_members, nm, sizeof(*p->members)) ||
+	if (reserve(&p->members, &p->cap_members, 2 + 2 * nd, sizeof(*p->members)) ||
 	    reserve(&p->groups, &p->cap_groups, 2 * ng, sizeof(*p->groups)) ||
-	    reserve(&p->small, &p->cap_small, ns, sizeof(*p->small)) ||
+	    reserve(&p->small, &p->cap_small, 4 * ng + 2 * nd, sizeof(*p->small)) ||
 	    reserve(&p->rules, &p->cap_rules, 2 * (ng + 2), sizeof(*p->rules)))
 		return -1;
 

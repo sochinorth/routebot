@@ -141,6 +141,18 @@ static inline size_t config_prefix(const struct config *c, size_t i, char *buf, 
 	return c->rule_group[*rule];
 }
 
+static inline const char *fam_name(int f)
+{
+	return f ? "v6" : "v4";
+}
+
+/* Index of the device with spec, the group named name; -1 if none (or c NULL). */
+int config_find_device(const struct config *c, const char *spec);
+int config_find_group(const struct config *c, const char *name);
+
+/* Is device d a member of a probed group? */
+bool config_dev_probed(const struct config *c, size_t d);
+
 /* prev: the config in use, whose lists are shared if their files are unchanged */
 struct config *config_load(const char *path, const struct config *prev);
 void config_free(struct config *c);
