@@ -105,3 +105,14 @@ not_logged() {
     if [ -n "$_said" ]; then fail "log said: $1"; echo "$_said" | sed 's/^/     | /'
     else pass "log didn't say: $1"; fi
 }
+
+# the kernel holds what a fresh start would install: restart and compare
+same_as_fresh() {
+    kstate > "$T/state.now"
+    stop
+    start
+    kstate > "$T/state.fresh"
+    if cmp -s "$T/state.now" "$T/state.fresh"; then pass "$1: same as a fresh start"
+    else fail "$1: differs from a fresh start"
+        diff -u "$T/state.now" "$T/state.fresh" | sed 's/^/     | /'; fi
+}
