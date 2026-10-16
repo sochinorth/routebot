@@ -244,16 +244,13 @@ static int plan_build(const struct world *w, struct plan *p)
 	return 0;
 }
 
-/* Entry i of c's family f list: its address, and its length and rule. */
-static const uint8_t *prefix_at(const struct config *c, int f, size_t i, uint8_t *plen,
-                                uint16_t *rule)
+/* Entry i of c's family f list: addr, then plen right after it, then rule. */
+static const uint8_t *prefix_at(const struct config *c, int f, size_t i, uint16_t *rule)
 {
 	if (f) {
-		*plen = c->p6[i].plen;
 		*rule = c->p6[i].rule;
 		return c->p6[i].addr;
 	}
-	*plen = c->p4[i].plen;
 	*rule = c->p4[i].rule;
 	return c->p4[i].addr;
 }
@@ -263,19 +260,12 @@ static size_t prefixes_n(const struct config *c, int f)
 	return f ? c->n_p6 : c->n_p4;
 }
 
-/* Orders entry i of a and entry j of b, both family f, by (addr, plen). */
-static int prefix_cmp(const struct config *a, size_t i, const struct config *b, size_t j, int f)
+static const void *prefixes_of(const struct config *c, int f)
 {
-	uint8_t pa, pb;
-	uint16_t ra, rb;
-	const uint8_t *x = prefix_at(a, f, i, &pa, &ra), *y = prefix_at(b, f, j, &pb, &rb);
-	int r = memcmp(x, y, f ? 16 : 4);
-
-	if (r)
-		return r;
-	return pa == pb ? 0 : pa < pb ? -1 : 1;
+	return f ? (const void *)c->p6 : (const void *)c->p4;
 }
 
+/* The one place a prefix route is built: entry i of w's family f list. */
 static void prefix_route(const struct world *w, const struct plan *p, int f, size_t i,
                          struct route_spec *r)
 {
@@ -285,11 +275,25 @@ static void prefix_route(const struct world *w, const struct plan *p, int f, siz
 
 	memset(r, 0, sizeof(*r));
 	r->family = families[f];
-	addr = prefix_at(c, f, i, &r->plen, &rule);
+	addr = prefix_at(c, f, i, &rule);
+	r->plen = addr[f ? 16 : 4];
 	memcpy(r->dst, addr, f ? 16 : 4);
 	r->table = c->table_id;
 	r->proto = c->rt_proto;
 	render(r, p, c->rule_group[rule], f);
+}
+
+static void prefix_send(struct nl *nl, enum nl_op op, const struct world *w,
+                        const struct plan *p, int f, size_t i, struct sync_stats *st)
+{
+	struct route_spec r;
+
+	prefix_route(w, p, f, i, &r);
+	nl_route(nl, op, &r);
+	if (op == NL_DEL)
+		st->route_del++;
+	else
+		st->route_set++;
 }
 
 static bool route_key_eq(const struct route_spec *a, const struct route_spec *b)
@@ -463,41 +467,99 @@ static bool prefixes_comparable(const struct world *old, const struct world *new
 	       old->cfg->rt_proto == new->cfg->rt_proto;
 }
 
+/*
+ * Old and new hold the very same family f list (the same config, or one
+ * shared across a reload): same keys and rule indexes, nothing to merge or
+ * delete. A rule may still map to another group.
+ */
+static bool prefixes_shared(const struct world *old, const struct world *new, int f)
+{
+	const struct config *oc = old->cfg, *nc = new->cfg;
+
+	return prefixes_comparable(old, new) && prefixes_of(oc, f) == prefixes_of(nc, f) &&
+	       prefixes_n(oc, f) == prefixes_n(nc, f) && oc->n_rules == nc->n_rules;
+}
+
+/* One family's prefixes, old and new, as prefix_changed() sees them. */
+struct prefix_diff {
+	const struct config *oc, *nc;
+	const struct plan *opl, *npl;
+	const struct redo *rd;
+	int f;
+};
+
+/*
+ * A prefix route depends on nothing but its group's nexthop (0 = blackhole),
+ * given comparable table and tag: it changed if that nexthop id did, or if
+ * the nexthop was deleted and created anew, taking the route with it.
+ */
+static bool prefix_changed(const struct prefix_diff *d, uint16_t orule, uint16_t nrule)
+{
+	uint32_t onh = d->opl->group_nh[2 * d->oc->rule_group[orule] + d->f];
+	uint32_t nnh = d->npl->group_nh[2 * d->nc->rule_group[nrule] + d->f];
+
+	return onh != nnh || redo_has(d->rd, nnh);
+}
+
+/* Shared lists: set what changed, after checking per rule whether anything did. */
+static void prefixes_set_shared(struct nl *nl, const struct prefix_diff *d,
+                                const struct world *new, struct sync_stats *st)
+{
+	size_t r, n = prefixes_n(d->nc, d->f);
+	uint16_t rule;
+
+	for (r = 0; r < d->nc->n_rules; r++)
+		if (prefix_changed(d, r, r))
+			break;
+	if (r == d->nc->n_rules)
+		return;
+
+	for (size_t i = 0; i < n; i++) {
+		prefix_at(d->nc, d->f, i, &rule);
+		if (prefix_changed(d, rule, rule))
+			prefix_send(nl, NL_SET, new, d->npl, d->f, i, st);
+	}
+}
+
+/* Orders entry i of a and entry j of b, both family f, by (addr, plen). */
+static int prefix_cmp(const struct config *a, size_t i, const struct config *b, size_t j, int f,
+                      uint16_t *ra, uint16_t *rb)
+{
+	return memcmp(prefix_at(a, f, i, ra), prefix_at(b, f, j, rb), f ? 17 : 5);
+}
+
 static void prefixes_set(struct nl *nl, const struct world *old, const struct plan *opl,
                          const struct world *new, const struct plan *npl,
                          const struct redo *rd, struct sync_stats *st)
 {
 	const struct config *oc = old->cfg, *nc = new->cfg;
 	bool comparable = prefixes_comparable(old, new);
-	struct route_spec ro, rn;
 
 	if (!nc)
 		return;
 
 	/* v4 then v6: the order of one (family, addr, plen) sorted walk */
 	for (int f = 0; f < 2; f++) {
+		struct prefix_diff d = { oc, nc, opl, npl, rd, f };
 		size_t no = comparable ? prefixes_n(oc, f) : 0, nn = prefixes_n(nc, f);
 		size_t i = 0, j = 0;
+		uint16_t ro = 0, rn = 0;
+
+		if (prefixes_shared(old, new, f)) {
+			prefixes_set_shared(nl, &d, new, st);
+			continue;
+		}
 
 		while (j < nn) {
-			int cmp = i < no ? prefix_cmp(oc, i, nc, j, f) : 1;
+			int cmp = i < no ? prefix_cmp(oc, i, nc, j, f, &ro, &rn) : 1;
 
 			if (cmp < 0) {
 				i++;
 				continue;
 			}
-
-			prefix_route(new, npl, f, j, &rn);
-			if (cmp == 0) {
-				prefix_route(old, opl, f, i, &ro);
-				i++;
-				if (route_eq(&ro, &rn) && !redo_has(rd, rn.nh_id)) {
-					j++;
-					continue;
-				}
-			}
-			nl_route(nl, NL_SET, &rn);
-			st->route_set++;
+			if (cmp > 0 || prefix_changed(&d, ro, rn))
+				prefix_send(nl, NL_SET, new, npl, f, j, st);
+			i += !cmp;
 			j++;
 		}
 	}
@@ -508,7 +570,6 @@ static void prefixes_del(struct nl *nl, const struct world *old, const struct pl
 {
 	const struct config *oc = old->cfg, *nc = new->cfg;
 	bool comparable = prefixes_comparable(old, new);
-	struct route_spec ro;
 
 	if (!oc)
 		return;
@@ -516,23 +577,18 @@ static void prefixes_del(struct nl *nl, const struct world *old, const struct pl
 	for (int f = 0; f < 2; f++) {
 		size_t no = prefixes_n(oc, f), nn = comparable ? prefixes_n(nc, f) : 0;
 		size_t i = 0, j = 0;
+		uint16_t ro, rn;
+
+		if (prefixes_shared(old, new, f))
+			continue;
 
 		while (i < no) {
-			int cmp = j < nn ? prefix_cmp(oc, i, nc, j, f) : -1;
+			int cmp = j < nn ? prefix_cmp(oc, i, nc, j, f, &ro, &rn) : -1;
 
-			if (cmp > 0) {
-				j++;
-				continue;
-			}
-			if (cmp == 0) {
-				i++;
-				j++;
-				continue;
-			}
-			prefix_route(old, opl, f, i, &ro);
-			nl_route(nl, NL_DEL, &ro);
-			st->route_del++;
-			i++;
+			if (cmp < 0)
+				prefix_send(nl, NL_DEL, old, opl, f, i, st);
+			i += cmp <= 0;
+			j += cmp >= 0;
 		}
 	}
 }
