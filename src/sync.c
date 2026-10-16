@@ -338,29 +338,25 @@ static uint32_t metric_of(uint8_t family, uint32_t metric)
 	return family == AF_INET6 && !metric ? METRIC_V6 : metric;
 }
 
-/* The same key: what a replace or a delete of a matches. */
-static bool route_key_eq(const struct route_spec *a, const struct kroute *k)
+/* The same key: what a replace or a delete of a matches (a has no tos, no source). */
+static bool route_key_eq(const struct route_spec *a, const struct route_spec *b)
 {
-	const struct route_spec *b = &k->r;
-
 	return a->family == b->family && a->plen == b->plen && a->table == b->table &&
 	       metric_of(a->family, a->metric) == metric_of(b->family, b->metric) &&
-	       !k->tos && !k->src_len && !memcmp(a->dst, b->dst, family_alen(a->family));
+	       !b->tos && !b->src_len && !memcmp(a->dst, b->dst, family_alen(a->family));
 }
 
 /*
  * The same route. The kernel reports one on a group that holds the
  * blackhole nexthop as a blackhole: only the nexthop counts then.
  */
-static bool route_eq(const struct route_spec *a, const struct kroute *k)
+static bool route_eq(const struct route_spec *a, const struct route_spec *b)
 {
-	const struct route_spec *b = &k->r;
-
-	if (!route_key_eq(a, k) || a->proto != b->proto || a->nh_id != b->nh_id)
+	if (!route_key_eq(a, b) || a->proto != b->proto || a->nh_id != b->nh_id)
 		return false;
 	if (a->nh_id)
 		return true;
-	return a->type == b->type && !k->multipath && a->oif == b->oif &&
+	return a->type == b->type && !b->multipath && a->oif == b->oif &&
 	       a->has_gw == b->has_gw &&
 	       (!a->has_gw || !memcmp(a->gw, b->gw, family_alen(a->family)));
 }
@@ -459,7 +455,7 @@ struct kstate {
 	size_t n_nh, cap_nh;
 	struct rule_spec *rules;	/* plain rules only (nl_parse_rule() == 0) */
 	size_t n_rules, cap_rules;
-	struct kroute *routes;
+	struct route_spec *routes;
 	size_t n_routes, cap_routes;
 };
 
@@ -551,8 +547,8 @@ static bool rule_in(const struct rule_spec *rs, size_t n, const struct rule_spec
 }
 
 /* Whether p has a small route eq() to k: route_eq() or route_key_eq(). */
-static bool small_has(const struct plan *p, const struct kroute *k,
-                      bool (*eq)(const struct route_spec *, const struct kroute *))
+static bool small_has(const struct plan *p, const struct route_spec *k,
+                      bool (*eq)(const struct route_spec *, const struct route_spec *))
 {
 	for (size_t i = 0; i < p->n_small; i++)
 		if (eq(&p->small[i], k))
@@ -631,10 +627,10 @@ static int observe_route_cb(const struct nlmsghdr *nlh, void *data)
 {
 	struct diff *d = data;
 	struct kstate *k = &d->s->k;
-	struct kroute r;
+	struct route_spec r;
 
 	/* the kernel filters already, unless strict checking is missing */
-	if (!nl_parse_route(nlh, &r) && r.r.table == d->table && is_ours(d, r.r.proto))
+	if (!nl_parse_route(nlh, &r) && r.table == d->table && is_ours(d, r.proto))
 		push(d, &k->routes, &k->n_routes, &k->cap_routes, &r, sizeof(r));
 	return MNL_CB_OK;
 }
@@ -820,14 +816,21 @@ static void prefix_send(const struct diff *d, enum nl_op op, const struct config
 }
 
 /* Entry i of c's family f list, off its nexthop: a plain blackhole. */
+/* By r's key: NL_DEL deletes it, NL_SET makes it a plain blackhole. */
+static void route_off(struct nl *nl, enum nl_op op, const struct route_spec *r)
+{
+	struct route_spec b = *r;
+
+	b.type = RTN_BLACKHOLE;
+	nl_route(nl, op, &b);
+}
+
 static void prefix_detach(const struct diff *d, const struct config *c, int f, size_t i)
 {
 	struct route_spec r;
 
 	prefix_route(c, f, i, &r);
-	r.type = RTN_BLACKHOLE;
-	r.nh_id = 0;
-	nl_route(d->nl, NL_SET, &r);
+	route_off(d->nl, NL_SET, &r);
 	d->st->route_set++;
 }
 
@@ -1014,11 +1017,9 @@ static unsigned bit_get(const uint8_t *bits, size_t i)
 }
 
 /* Is k the key of one of c's prefix routes? Its index in family *f then, else -1. */
-static long wanted_prefix(const struct config *c, const struct kroute *k, int *f)
+static long wanted_prefix(const struct config *c, const struct route_spec *r, int *f)
 {
-	const struct route_spec *r = &k->r;
-
-	if (r->table != c->table_id || k->tos || k->src_len)
+	if (r->table != c->table_id || r->tos || r->src_len)
 		return -1;
 	*f = r->family == AF_INET6;
 	if (metric_of(r->family, r->metric) != (*f ? METRIC_V6 : 0))
@@ -1027,11 +1028,11 @@ static long wanted_prefix(const struct config *c, const struct kroute *k, int *f
 }
 
 /* A route of routebot's that want has no key for, outside the observed tables. */
-static bool route_unwanted(const struct diff *d, const struct kroute *k)
+static bool route_unwanted(const struct diff *d, const struct route_spec *k)
 {
 	int f;
 
-	return !observed_table(d, k->r.table) && !small_has(d->pw, k, route_key_eq) &&
+	return !observed_table(d, k->table) && !small_has(d->pw, k, route_key_eq) &&
 	       wanted_prefix(d->wc, k, &f) < 0;
 }
 
@@ -1039,11 +1040,11 @@ static bool route_unwanted(const struct diff *d, const struct kroute *k)
  * An unwanted route to take off before nexthops and rules change: on a
  * nexthop that goes, or in one of want's tables.
  */
-static bool unwanted_off(const struct diff *d, const struct kroute *k)
+static bool unwanted_off(const struct diff *d, const struct route_spec *k)
 {
-	uint32_t t = k->r.table;
+	uint32_t t = k->table;
 
-	return idset_has(&d->s->doomed, k->r.nh_id) || t == d->wc->table_id ||
+	return idset_has(&d->s->doomed, k->nh_id) || t == d->wc->table_id ||
 	       (t > d->wc->table_id && t - d->wc->table_id <= d->wc->n_groups + 1);
 }
 
@@ -1057,11 +1058,11 @@ static int scan_cb(const struct nlmsghdr *nlh, void *data)
 {
 	struct scan *sc = data;
 	const struct diff *d = sc->d;
-	struct kroute k;
+	struct route_spec k;
 	long i;
 	int f;
 
-	if (nl_parse_route(nlh, &k) || !is_ours(d, k.r.proto) || observed_table(d, k.r.table))
+	if (nl_parse_route(nlh, &k) || !is_ours(d, k.proto) || observed_table(d, k.table))
 		return MNL_CB_OK;
 	i = wanted_prefix(d->wc, &k, &f);
 	if (i < 0) {
@@ -1069,8 +1070,8 @@ static int scan_cb(const struct nlmsghdr *nlh, void *data)
 			return MNL_CB_OK;
 		sc->n_unwanted++;
 		sc->n_unwanted_off += unwanted_off(d, &k);
-	} else if (k.r.proto == d->wc->rt_proto && k.r.nh_id == prefix_nh(d->wc, f, i) &&
-	           !idset_has(&d->s->doomed, k.r.nh_id)) {
+	} else if (k.proto == d->wc->rt_proto && k.nh_id == prefix_nh(d->wc, f, i) &&
+	           !idset_has(&d->s->doomed, k.nh_id)) {
 		bit_set(d->s->bits, bit_index(d->wc, f, i), BIT_OK);
 	} else {
 		/* wrong, whatever it is: off it first, set after */
@@ -1110,7 +1111,7 @@ struct sweep {
 	struct nl *nl;
 	uint8_t proto;
 	enum nl_op op;
-	bool (*pred)(const struct kroute *k, const void *data);
+	bool (*pred)(const struct route_spec *k, const void *data);
 	const void *data;
 	size_t n_sent;
 };
@@ -1118,14 +1119,12 @@ struct sweep {
 static int sweep_cb(const struct nlmsghdr *nlh, void *data)
 {
 	struct sweep *sw = data;
-	struct route_key key;
-	struct kroute k;
+	struct route_spec k;
 
-	if (nl_parse_route(nlh, &k) || k.r.proto != sw->proto ||
+	if (nl_parse_route(nlh, &k) || k.proto != sw->proto ||
 	    (sw->pred && !sw->pred(&k, sw->data)))
 		return MNL_CB_OK;
-	kroute_key(&k, &key);
-	nl_route_key(sw->nl, sw->op, &key, sw->proto);
+	route_off(sw->nl, sw->op, &k);
 	sw->n_sent++;
 	return MNL_CB_OK;
 }
@@ -1161,21 +1160,21 @@ static int sweep_run(struct sweep *sw, size_t *n_done, size_t *n_left, unsigned 
 	return 0;
 }
 
-static bool pred_unwanted(const struct kroute *k, const void *data)
+static bool pred_unwanted(const struct route_spec *k, const void *data)
 {
 	return route_unwanted(data, k);
 }
 
-static bool pred_unwanted_off(const struct kroute *k, const void *data)
+static bool pred_unwanted_off(const struct route_spec *k, const void *data)
 {
 	const struct diff *d = data;
 
-	return (k->r.type != RTN_BLACKHOLE || k->r.nh_id) && route_unwanted(d, k) &&
+	return (k->type != RTN_BLACKHOLE || k->nh_id) && route_unwanted(d, k) &&
 	       unwanted_off(d, k);
 }
 
 /* Sweep, with each of routebot's protos, the routes pred() holds for. */
-static int sweep_protos(const struct diff *d, bool (*pred)(const struct kroute *, const void *),
+static int sweep_protos(const struct diff *d, bool (*pred)(const struct route_spec *, const void *),
                         enum nl_op op)
 {
 	for (size_t p = 0; p < d->n_protos; p++) {
@@ -1324,14 +1323,14 @@ static void log_lost(const struct diff *d)
 			lost(d, o.name, g < pw->n_groups ? "group" : "nexthop", o.f);
 	}
 	for (size_t i = 0; i < pw->n_small; i++) {
-		struct kroute k = { .r = pw->small[i] };	/* as prev had it */
-		size_t dev = k.r.metric - 1;
+		struct route_spec k = pw->small[i];	/* as prev had it */
+		size_t dev = k.metric - 1;
 
-		k.r.proto = pc->rt_proto;
-		if (k.r.table == cfg_probe_table(wc) && !k_has_route(d, &pw->small[i]) &&
+		k.proto = pc->rt_proto;
+		if (k.table == cfg_probe_table(wc) && !k_has_route(d, &pw->small[i]) &&
 		    dev < pc->n_devices && !strcmp(pc->devices[dev].spec, wc->devices[dev].spec) &&
 		    small_has(pp, &k, route_eq))
-			lost(d, wc->devices[dev].spec, "probe route", k.r.family == AF_INET6);
+			lost(d, wc->devices[dev].spec, "probe route", k.family == AF_INET6);
 	}
 	for (size_t i = 0; i < pw->n_rules; i++)
 		if (!rule_in(d->k->rules, d->k->n_rules, &pw->rules[i]) &&
@@ -1415,18 +1414,16 @@ static void small_routes_set(const struct diff *d, bool blackholes)
 static void small_routes_del(const struct diff *d, bool early)
 {
 	for (size_t i = 0; i < d->k->n_routes; i++) {
-		const struct kroute *k = &d->k->routes[i];
-		struct route_key key;
+		const struct route_spec *k = &d->k->routes[i];
 
-		if (!is_ours(d, k->r.proto))
+		if (!is_ours(d, k->proto))
 			continue;
 		if (early ? d->mode != SYNC_FULL || small_has(d->pw, k, route_eq) ||
-		            (k->r.type == RTN_BLACKHOLE && !k->r.nh_id)
+		            (k->type == RTN_BLACKHOLE && !k->nh_id)
 		          : small_has(d->pw, k, route_key_eq) ||
-		            (d->mode != SYNC_FULL && idset_has(&d->s->doomed, k->r.nh_id)))
+		            (d->mode != SYNC_FULL && idset_has(&d->s->doomed, k->nh_id)))
 			continue;
-		kroute_key(k, &key);
-		nl_route_key(d->nl, early ? NL_SET : NL_DEL, &key, k->r.proto);
+		route_off(d->nl, early ? NL_SET : NL_DEL, k);
 		if (early)
 			d->st->route_set++;
 		else

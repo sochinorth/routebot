@@ -35,53 +35,29 @@ struct nl {
 	unsigned n_refused, cap_refused;
 };
 
+/*
+ * A route. tos (v4) and a source prefix (v6) routebot never sets, but
+ * leftovers may carry them: they are part of a route's key, which a delete
+ * matches on along with family, table, dst and metric.
+ */
 struct route_spec {
 	uint8_t family;
 	uint8_t plen;
-	uint8_t type;		/* RTN_UNICAST or RTN_BLACKHOLE */
+	uint8_t type;		/* RTN_UNICAST or RTN_BLACKHOLE; as reported, a route on a
+				   group that holds the blackhole nexthop is RTN_BLACKHOLE */
 	uint8_t proto;
 	bool has_gw;
+	uint8_t tos;		/* v4 only */
+	uint8_t src_len;	/* v6 only */
+	bool multipath;		/* reported RTA_MULTIPATH without RTA_NH_ID: oif/gw unset */
 	uint32_t table;
 	uint32_t nh_id;		/* RTN_UNICAST via a nexthop object; oif/gw unused */
 	uint32_t metric;	/* 0 = kernel default */
 	int oif;
 	uint8_t dst[16];
+	uint8_t src[16];
 	uint8_t gw[16];
 };
-
-/*
- * Everything the kernel matches a route delete on that tells two routes of
- * one protocol apart: v4 by table, dst, tos and metric, v6 by table, dst,
- * source prefix and metric (a v6 multipath route goes as a whole). Type,
- * scope and nexthops are left out, so they match anything; where two routes
- * still share a key, each delete takes one.
- */
-struct route_key {
-	uint8_t family;
-	uint8_t dst_len;
-	uint8_t src_len;	/* v6 only */
-	uint8_t tos;		/* v4 only */
-	uint32_t table;
-	uint32_t metric;	/* 0 = any (v4: the lowest first) */
-	uint8_t dst[16];
-	uint8_t src[16];
-};
-
-/*
- * A route as the kernel reports it: spec plus the key parts routebot never
- * sets itself (v4 tos, v6 source prefix), which leftovers may carry.
- */
-struct kroute {
-	struct route_spec r;	/* type as reported: a route on a group that holds
-				   the blackhole nexthop is RTN_BLACKHOLE with nh_id */
-	uint8_t tos;		/* v4 only */
-	uint8_t src_len;	/* v6 only */
-	uint8_t src[16];
-	bool multipath;		/* RTA_MULTIPATH without RTA_NH_ID: oif/gw unset */
-};
-
-/* The key a delete of k matches on; metric is k's own (never "any"). */
-void kroute_key(const struct kroute *k, struct route_key *out);
 
 #define MAX_NH_GROUP 32
 
@@ -141,7 +117,7 @@ enum nl_op {
  * selectors, 1 for any other rule (iif, oif, src, dst, invert, goto, ...),
  * with the fields filled as far as they go, -1 for malformed or non-v4/v6.
  */
-int nl_parse_route(const struct nlmsghdr *nlh, struct kroute *out);
+int nl_parse_route(const struct nlmsghdr *nlh, struct route_spec *out);
 int nl_parse_nexthop(const struct nlmsghdr *nlh, struct nexthop_spec *out);
 int nl_parse_rule(const struct nlmsghdr *nlh, struct rule_spec *out);
 
@@ -180,13 +156,8 @@ int nl_dump_rules(struct nl *nl, mnl_cb_t cb, void *data);
  * get drained right after each chunk.
  */
 void nl_batch_begin(struct nl *nl);
+/* A delete matches r's key and proto, any type and scope. */
 void nl_route(struct nl *nl, enum nl_op op, const struct route_spec *r);
-/*
- * By full key, with protocol proto: NL_DEL deletes the route, NL_SET
- * replaces it with a blackhole of the same key (make-before-break for
- * routes routebot has no spec of, e.g. leftovers with a tos or source).
- */
-void nl_route_key(struct nl *nl, enum nl_op op, const struct route_key *k, uint8_t proto);
 void nl_rule(struct nl *nl, enum nl_op op, const struct rule_spec *r);
 /* NL_SET creates or replaces in place, NL_REPLACE only replaces; on delete only id matters. */
 void nl_nexthop(struct nl *nl, enum nl_op op, const struct nexthop_spec *n);
