@@ -50,7 +50,6 @@
  *     dump): that is counted and logged, and the next sync must repair it
  *   - nothing sent when nothing changed, no prefix route sent for member
  *     changes, no route sent by a full sync of an intact kernel
- *   - kstate_observe() over the model reports exactly the model
  */
 #include <arpa/inet.h>
 #include <errno.h>
@@ -66,7 +65,6 @@
 #include <linux/nexthop.h>
 #include <linux/rtnetlink.h>
 
-#include "kstate.h"
 #include "log.h"
 #include "sync.h"
 
@@ -3253,121 +3251,6 @@ static void after_message(const struct nlmsghdr *nlh)
 	targets_check(nlh, !route);
 }
 
-/* --- kstate_observe over the model --- */
-
-static void observed_text(struct kernel *k, char **out)
-{
-	struct lines ls = {};
-	char buf[512];
-
-	for (int i = 0; i < MAXR; i++)
-		if (k->r[i].used && ours(k->r[i].proto)) {
-			struct mroute r = k->r[i];
-
-			r.scope = 0;
-			r.type = route_type(k, &k->r[i]);
-			if (r.nh_id || r.type != RTN_UNICAST) {
-				r.oif = 0;
-				r.has_gw = false;
-				memset(r.gw, 0, 16);
-			}
-			route_text(k, &r, true, buf, sizeof(buf));
-			lines_add(&ls, buf);
-		}
-	for (size_t i = 0; i < k->nnh; i++) {
-		nh_text(&k->nh[i], true, buf, sizeof(buf));
-		lines_add(&ls, buf);
-	}
-	for (int l = 0; l < 4; l += 3)
-		for (size_t i = 0; i < k->nru[l]; i++)
-			if (ours(k->ru[l][i].proto)) {
-				rule_text(&k->ru[l][i], buf, sizeof(buf));
-				lines_add(&ls, buf);
-			}
-	*out = lines_join(&ls);
-}
-
-static struct kstate ks;
-
-static void check_observe(void)
-{
-	static uint32_t tables[MAXT * 2];
-	struct kscope sc = { .protos = { PROTO_A, PROTO_B }, .n_protos = 2,
-	                     .id_lo = { 1 }, .id_hi = { UINT32_MAX }, .n_ranges = 1,
-	                     .tables = tables };
-	struct lines ls = {};
-	char buf[512], *got, *want;
-	int ret;
-
-	for (int i = 0; i < MAXR; i++) {
-		size_t j;
-
-		if (!K->r[i].used || !ours(K->r[i].proto))
-			continue;
-		for (j = 0; j < sc.n_tables; j++)
-			if (tables[j] == K->r[i].table)
-				break;
-		if (j == sc.n_tables)
-			tables[sc.n_tables++] = K->r[i].table;
-	}
-	ret = kstate_observe(&nl, &sc, &ks);
-	if (ret) {
-		fail("kstate_observe over the model: %s", strerror(-ret));
-		return;
-	}
-	CHECK(!q_len(&dumpq) && !q_len(&errq) && !ds.active,
-	      "kstate_observe left %zu datagrams unread", q_len(&dumpq) + q_len(&errq));
-	CHECK(!ks.n_odd_rules, "kstate_observe: %zu odd rules", ks.n_odd_rules);
-	for (size_t i = 0; i < ks.n_routes; i++) {
-		const struct kroute *kr = &ks.routes[i];
-		struct mroute r = {};
-
-		r.family = kr->r.family;
-		r.dst_len = kr->r.plen;
-		r.src_len = kr->src_len;
-		r.tos = kr->tos;
-		r.type = kr->r.type;
-		r.proto = kr->r.proto;
-		r.table = kr->r.table;
-		r.metric = kr->r.metric;
-		r.nh_id = kr->r.nh_id;
-		r.oif = kr->r.oif;
-		r.has_gw = kr->r.has_gw;
-		memcpy(r.dst, kr->r.dst, 16);
-		memcpy(r.src, kr->src, 16);
-		memcpy(r.gw, kr->r.gw, 16);
-		route_text(K, &r, true, buf, sizeof(buf));
-		lines_add(&ls, buf);
-	}
-	for (size_t i = 0; i < ks.n_nh; i++) {
-		const struct nexthop_spec *s = &ks.nh[i];
-		struct mnh n = { .id = s->id, .group = s->n_grp > 0, .blackhole = s->blackhole,
-		                 .family = s->family, .proto = s->proto, .oif = s->oif,
-		                 .has_gw = s->has_gw, .n = s->n_grp, .buckets = s->buckets,
-		                 .idle = s->timer_idle * 100, .busy = s->timer_busy * 100 };
-
-		memcpy(n.gw, s->gw, 16);
-		for (uint16_t j = 0; j < s->n_grp; j++) {
-			n.ids[j] = s->grp[j].id;
-			n.weights[j] = s->grp[j].weight;
-		}
-		nh_text(&n, true, buf, sizeof(buf));
-		lines_add(&ls, buf);
-	}
-	for (size_t i = 0; i < ks.n_rules; i++) {
-		const struct rule_spec *s = &ks.rules[i];
-		struct mrule r = { s->family, s->proto, s->prio, s->mark, s->mask, s->table };
-
-		rule_text(&r, buf, sizeof(buf));
-		lines_add(&ls, buf);
-	}
-	got = lines_join(&ls);
-	observed_text(K, &want);
-	same_text(got, want, "kstate_observe over the model differs from the model");
-	free(got);
-	free(want);
-}
-
 /* --- steps --- */
 
 static struct sync *S_fresh;	/* fresh installs', apart from S, the one under test */
@@ -3578,7 +3461,6 @@ static struct step_result step(const char *what, struct tworld *prev, struct two
 	same_text(fa, fb, "foreign objects changed");
 	free(fa);
 	free(fb);
-	check_observe();
 	q_clear();
 	report_step(prev, want);
 	return res;
@@ -4530,7 +4412,6 @@ int main(int argc, char **argv)
 	        totals.expected_by_type[0], totals.expected_by_type[1], totals.expected_by_type[2],
 	        totals.expected_by_type[3], totals.unexpected);
 
-	kstate_free(&ks);
 	sync_free(S);
 	sync_free(S_fresh);
 	nl_close(&nl);

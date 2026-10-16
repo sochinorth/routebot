@@ -81,6 +81,7 @@ int sync_flush(struct nl *nl, uint8_t proto);
  * with cfg's rt_proto or prev's (NULL = none) are routebot's.
  * Returns 0 or -1, logged.
  */
-int sync_check_nhids(struct nl *nl, const struct config *cfg, const struct config *prev);
+int sync_check_nhids(struct sync *s, struct nl *nl, const struct config *cfg,
+                     const struct config *prev);
 
 #endif

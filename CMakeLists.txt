@@ -28,7 +28,6 @@ add_executable(routebot
 	src/cidr.c
 	src/nl.c
 	src/ifstate.c
-	src/kstate.c
 	src/sync.c
 	src/probe.c
 	src/netifd.c

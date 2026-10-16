@@ -441,7 +441,7 @@ static void reload(void)
 	if (rb.cfg->rt_proto != cfg->rt_proto &&
 	    (!rb.applied.cfg || rb.applied.cfg->rt_proto != rb.cfg->rt_proto))
 		sync_flush(&rb.nl, rb.cfg->rt_proto);
-	if (sync_check_nhids(&rb.nl, cfg, rb.applied.cfg)) {
+	if (sync_check_nhids(rb.sync, &rb.nl, cfg, rb.applied.cfg)) {
 		err("reload failed, keeping the old config");
 		config_free(cfg);
 		return;
@@ -578,7 +578,7 @@ int main(int argc, char **argv)
 		}
 		/* events queue up on the socket from here on, nothing is missed */
 		live_init(&rb.live, cfg);
-		if (sync_check_nhids(&rb.nl, cfg, NULL) || live_dump(&rb.live, &rb.nl)) {
+		if (sync_check_nhids(rb.sync, &rb.nl, cfg, NULL) || live_dump(&rb.live, &rb.nl)) {
 			config_free(cfg);
 			goto out;
 		}

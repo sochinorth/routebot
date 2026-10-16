@@ -6,7 +6,6 @@
 #include <linux/nexthop.h>
 #include <linux/rtnetlink.h>
 
-#include "kstate.h"
 #include "log.h"
 #include "sync.h"
 
@@ -454,6 +453,23 @@ static int same_owner(const struct config *a, const struct config *b, uint32_t i
 
 /* --- the sync context --- */
 
+/* What the kernel holds of routebot's small objects, as observed. */
+struct kstate {
+	struct nexthop_spec *nh;	/* groups have family AF_UNSPEC */
+	size_t n_nh, cap_nh;
+	struct rule_spec *rules;	/* plain rules only (nl_parse_rule() == 0) */
+	size_t n_rules, cap_rules;
+	struct kroute *routes;
+	size_t n_routes, cap_routes;
+};
+
+static void kstate_free(struct kstate *k)
+{
+	free(k->nh);
+	free(k->rules);
+	free(k->routes);
+}
+
 struct sync {
 	struct kstate k;
 	struct plan want, prev;
@@ -496,6 +512,8 @@ struct diff {
 	uint8_t protos[2];		/* routebot's: want's rt_proto, prev's */
 	size_t n_protos;
 	size_t n_tables;		/* in s->tables */
+	uint32_t table;			/* the one being observed */
+	bool oom, no_nh;		/* observing ran out of memory; no nexthop objects */
 	enum sync_mode mode;
 	struct sync_stats *st;
 };
@@ -568,42 +586,109 @@ static int add_tables(struct diff *d, const struct config *c)
 	return 0;
 }
 
-static uint32_t nhid_end(const struct config *c)
+static bool in_range(const struct config *c, uint32_t id)
 {
-	return cfg_nhid_end(c) > UINT32_MAX ? UINT32_MAX : cfg_nhid_end(c);
+	return c && id >= cfg_nhid_start(c) && id <= cfg_nhid_end(c);
 }
 
-/* Dump routebot's small objects, and nexthops in its id ranges. */
+/* Append *e to the array *p of *n; out of memory: noted, the dump drains on. */
+static void push(struct diff *d, void *p, size_t *n, size_t *cap, const void *e, size_t size)
+{
+	if (reserve(p, cap, *n + 1, size)) {
+		d->oom = true;
+		return;
+	}
+	memcpy(*(char **)p + (*n)++ * size, e, size);
+}
+
+/* routebot's nexthops, and any in its id ranges (to spot foreign ones) */
+static int observe_nh_cb(const struct nlmsghdr *nlh, void *data)
+{
+	struct diff *d = data;
+	struct kstate *k = &d->s->k;
+	struct nexthop_spec n;
+
+	/* a group too large to parse has id and proto: kept, and replaced */
+	if ((nl_parse_nexthop(nlh, &n) && !n.id) ||
+	    !(is_ours(d, n.proto) || in_range(d->wc, n.id) || in_range(d->pc, n.id)))
+		return MNL_CB_OK;
+	push(d, &k->nh, &k->n_nh, &k->cap_nh, &n, sizeof(n));
+	return MNL_CB_OK;
+}
+
+static int observe_rule_cb(const struct nlmsghdr *nlh, void *data)
+{
+	struct diff *d = data;
+	struct kstate *k = &d->s->k;
+	struct rule_spec r;
+
+	if (!nl_parse_rule(nlh, &r) && is_ours(d, r.proto))
+		push(d, &k->rules, &k->n_rules, &k->cap_rules, &r, sizeof(r));
+	return MNL_CB_OK;
+}
+
+static int observe_route_cb(const struct nlmsghdr *nlh, void *data)
+{
+	struct diff *d = data;
+	struct kstate *k = &d->s->k;
+	struct kroute r;
+
+	/* the kernel filters already, unless strict checking is missing */
+	if (!nl_parse_route(nlh, &r) && r.r.table == d->table && is_ours(d, r.r.proto))
+		push(d, &k->routes, &k->n_routes, &k->cap_routes, &r, sizeof(r));
+	return MNL_CB_OK;
+}
+
+/*
+ * Dump routebot's small objects, and nexthops in its id ranges, into s->k,
+ * whose buffers only grow. Returns 0 or -errno.
+ */
 static int observe(struct diff *d)
 {
-	struct kscope sc = { .n_protos = d->n_protos };
+	struct kstate *k = &d->s->k;
+	int ret;
 
-	memcpy(sc.protos, d->protos, sizeof(sc.protos));
-	sc.id_lo[sc.n_ranges] = cfg_nhid_start(d->wc);
-	sc.id_hi[sc.n_ranges++] = nhid_end(d->wc);
-	if (d->pc) {
-		sc.id_lo[sc.n_ranges] = cfg_nhid_start(d->pc);
-		sc.id_hi[sc.n_ranges++] = nhid_end(d->pc);
+	k->n_nh = k->n_rules = k->n_routes = d->n_tables = 0;
+	d->oom = d->no_nh = false;
+	ret = nl_dump_nexthops(d->nl, observe_nh_cb, d);
+	if (ret == -EOPNOTSUPP) {
+		d->no_nh = true;
+		ret = 0;
 	}
-	d->n_tables = 0;
-	if (add_tables(d, d->wc) || add_tables(d, d->pc))
-		return -ENOMEM;
-	sc.tables = d->s->tables;
-	sc.n_tables = d->n_tables;
-	return kstate_observe(d->nl, &sc, &d->s->k);
+	if (!ret)
+		ret = nl_dump_rules(d->nl, observe_rule_cb, d);
+	if (!ret && (add_tables(d, d->wc) || add_tables(d, d->pc)))
+		ret = -ENOMEM;
+	for (size_t i = 0; !ret && i < d->n_tables; i++) {
+		d->table = d->s->tables[i];
+		ret = nl_dump_routes(d->nl, AF_UNSPEC, d->table,
+		                     d->n_protos == 1 ? d->protos[0] : 0, observe_route_cb, d);
+	}
+	return ret ? ret : d->oom ? -ENOMEM : 0;
 }
 
-/* A nexthop in want's id range that isn't routebot's. */
-static const struct nexthop_spec *foreign_nh(const struct diff *d)
+/* Refuse a nexthop in want's id range that isn't routebot's. Returns 0 or -1, logged. */
+static int check_foreign(const struct diff *d)
 {
 	for (size_t i = 0; i < d->k->n_nh; i++) {
 		const struct nexthop_spec *kn = &d->k->nh[i];
 
-		if (!is_ours(d, kn->proto) && kn->id >= cfg_nhid_start(d->wc) &&
-		    kn->id <= cfg_nhid_end(d->wc))
-			return kn;
+		if (!is_ours(d, kn->proto) && in_range(d->wc, kn->id)) {
+			err("nexthop id %u has proto %u, not %u: nexthop_id range %u..%llu must be "
+			    "routebot's alone", kn->id, kn->proto, d->wc->rt_proto,
+			    cfg_nhid_start(d->wc), (unsigned long long)cfg_nhid_end(d->wc));
+			return -1;
+		}
 	}
-	return NULL;
+	return 0;
+}
+
+/* routebot's protos: want's, and prev's if another */
+static void set_protos(struct diff *d)
+{
+	d->protos[d->n_protos++] = d->wc->rt_proto;
+	if (d->pc && !is_ours(d, d->pc->rt_proto))
+		d->protos[d->n_protos++] = d->pc->rt_proto;
 }
 
 /* Leave the refused members out of want: their groups, their probe routes. */
@@ -1428,16 +1513,13 @@ int sync_apply(struct sync *s, struct nl *nl, const struct world *prev,
 		.s = s, .nl = nl, .pc = prev->cfg, .wc = want->cfg, .k = &s->k,
 		.pw = &s->want, .pp = &s->prev, .st = st, .mode = mode,
 	};
-	const struct nexthop_spec *foreign;
 	struct scan sc = {};
 	unsigned uncertain = 0;
 	int ret;
 
 	memset(st, 0, sizeof(*st));
 	s->refused.n = 0;
-	d.protos[d.n_protos++] = want->cfg->rt_proto;
-	if (d.pc && !is_ours(&d, d.pc->rt_proto))
-		d.protos[d.n_protos++] = d.pc->rt_proto;
+	set_protos(&d);
 	/* nothing believed, or a layout change: all of it observed */
 	if (!d.pc || layout_changes(d.pc, d.wc))
 		d.mode = SYNC_FULL;
@@ -1457,11 +1539,7 @@ int sync_apply(struct sync *s, struct nl *nl, const struct world *prev,
 		st->errors++;
 		return -1;
 	}
-	foreign = foreign_nh(&d);
-	if (foreign) {
-		err("nexthop id %u has proto %u, not %u: nexthop_id range %u..%llu must be "
-		    "routebot's alone", foreign->id, foreign->proto, d.wc->rt_proto,
-		    cfg_nhid_start(d.wc), (unsigned long long)cfg_nhid_end(d.wc));
+	if (check_foreign(&d)) {
 		st->errors++;
 		return -1;
 	}
@@ -1556,26 +1634,27 @@ static void flush_nexthops(struct nl *nl, const struct kstate *k, bool groups)
  */
 int sync_flush(struct nl *nl, uint8_t proto)
 {
-	struct kscope sc = { .protos = { proto }, .n_protos = 1 };
+	struct sync s = {};
+	struct diff d = { .s = &s, .nl = nl, .k = &s.k, .protos = { proto }, .n_protos = 1 };
 	struct sweep sw = { .nl = nl, .proto = proto, .op = NL_DEL };
-	struct kstate k = {};
+	const struct kstate *k = &s.k;
 	size_t n_routes = 0, n_left = 0, n_more = 0;
 	unsigned errors;
-	int ret = kstate_observe(nl, &sc, &k);
+	int ret = observe(&d);
 
 	if (ret)
 		goto fail;
 	nl_batch_begin(nl);
-	for (size_t i = 0; i < k.n_rules; i++)
-		nl_rule(nl, NL_DEL, &k.rules[i]);
-	flush_nexthops(nl, &k, true);
+	for (size_t i = 0; i < k->n_rules; i++)
+		nl_rule(nl, NL_DEL, &k->rules[i]);
+	flush_nexthops(nl, k, true);
 	errors = nl_batch_end(nl);
 
 	ret = sweep_run(&sw, &n_routes, &n_left, &errors);
 	if (ret)
 		goto fail;
 	nl_batch_begin(nl);
-	flush_nexthops(nl, &k, false);
+	flush_nexthops(nl, k, false);
 	errors += nl_batch_end(nl);
 
 	/* some may have been on the members */
@@ -1586,72 +1665,37 @@ int sync_flush(struct nl *nl, uint8_t proto)
 		warn("flush: %zu routes with proto %u left, can't delete them", n_left, proto);
 		errors++;
 	}
-	if (k.n_rules || k.n_nh || n_routes)
+	if (k->n_rules || k->n_nh || n_routes)
 		info("flush: removed %zu rules, %zu nexthops and the routes on them, "
-		     "%zu other routes with proto %u%s", k.n_rules, k.n_nh, n_routes, proto,
+		     "%zu other routes with proto %u%s", k->n_rules, k->n_nh, n_routes, proto,
 		     errors ? " (with errors)" : "");
-	kstate_free(&k);
+	kstate_free(&s.k);
 	return errors ? -EIO : 0;
 
 fail:
 	err("flush: dump failed: %s", strerror(-ret));
-	kstate_free(&k);
+	kstate_free(&s.k);
 	return ret;
 }
 
 /* --- nexthop id ownership --- */
 
-struct nhid_ctx {
-	const struct config *cfg;
-	uint8_t protos[2];
-	size_t n_protos;
-	uint32_t id;		/* first foreign id found, 0 = none */
-	uint8_t proto;
-};
-
-static int nhid_cb(const struct nlmsghdr *nlh, void *data)
+int sync_check_nhids(struct sync *s, struct nl *nl, const struct config *cfg,
+                     const struct config *prev)
 {
-	struct nhid_ctx *nc = data;
-	struct nexthop_spec n;
-
-	/* a group too big to parse still has its id and proto */
-	if (nc->id || (nl_parse_nexthop(nlh, &n) && !n.id))
-		return MNL_CB_OK;
-	for (size_t i = 0; i < nc->n_protos; i++)
-		if (n.proto == nc->protos[i])
-			return MNL_CB_OK;
-	if (n.id >= cfg_nhid_start(nc->cfg) && n.id <= cfg_nhid_end(nc->cfg)) {
-		nc->id = n.id;
-		nc->proto = n.proto;
-	}
-	return MNL_CB_OK;
-}
-
-int sync_check_nhids(struct nl *nl, const struct config *cfg, const struct config *prev)
-{
-	struct nhid_ctx nc = { .cfg = cfg };
+	struct diff d = { .s = s, .nl = nl, .pc = prev, .wc = cfg, .k = &s->k };
 	int ret;
 
-	nc.protos[nc.n_protos++] = cfg->rt_proto;
-	if (prev)
-		nc.protos[nc.n_protos++] = prev->rt_proto;
-
-	ret = nl_dump_nexthops(nl, nhid_cb, &nc);
-	if (ret == -EOPNOTSUPP) {
-		if (!cfg->n_groups)
-			return 0;
+	set_protos(&d);
+	ret = observe(&d);
+	if (ret) {
+		err("can't read the kernel's state: %s", strerror(-ret));
+		return -1;
+	}
+	if (d.no_nh && cfg->n_groups) {
 		err("kernel lacks nexthop objects (need >= 5.13)");
 		return -1;
 	}
-	if (ret) {
-		err("nexthop dump failed: %s", strerror(-ret));
-		return -1;
-	}
-	if (nc.id) {
-		err("nexthop id %u has proto %u, not %u: nexthop_id range %u..%llu "
-		    "must be routebot's alone", nc.id, nc.proto, cfg->rt_proto,
-		    cfg_nhid_start(cfg), (unsigned long long)cfg_nhid_end(cfg));
-		return -1;
-	}
-	return 0;
+	return check_foreign(&d);
 }
+
