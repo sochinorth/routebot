@@ -512,6 +512,33 @@ static void s_big(void)
 	     "config rule 'v'\n\toption group 'gB'\n\tlist cidrset '@/big/v.lst'\n");
 }
 
+static void s_nearly_sorted(void)
+{
+	struct sb s = {}, t = {};
+
+	begin("nearly sorted dumps: entries out of place, alone and in clumps");
+	for (unsigned i = 0; i < 30000; i++) {
+		sbf(&s, "%u.%u.%u.0/24\n", 20 + i / 10000, (i / 40) % 250, i % 40);
+		if (rnd(33) == 0)	/* a copy of some entry, anywhere */
+			sbf(&s, "%u.%u.%u.0/24\n", 20 + rnd(3), rnd(250), rnd(40));
+		if (rnd(1000) == 0)	/* clumps of big ones, of small ones */
+			sbf(&s, "250.0.0.0/8\n251.0.0.0/8\n252.0.0.0/8\n");
+		if (rnd(1000) == 0)
+			sbf(&s, "1.0.0.0/8\n2.0.0.0/8\n3.0.0.0/8\n4.0.0.0/8\n5.0.0.0/8\n6.0.0.0/8\n");
+		if (i % 3 == 0)
+			sbf(&s, "2a01:%x:%x::/48\n", i / 300, i % 300 + (rnd(50) ? 0 : 7));
+	}
+	puts_("n/a.lst", s.s);
+	/* short ones: below any useful set-aside budget */
+	sbf(&t, "9.0.0.0/8\n8.0.0.0/8\n7.0.0.0/8\n9.0.0.0/8\n::/0\n");
+	puts_("n/b.lst", t.s);
+	free(s.s);
+	free(t.s);
+	load(GROUPS
+	     "config rule 'b'\n\toption group 'gB'\n\tlist cidrset '@/n/b.lst'\n"
+	     "config rule 'a'\n\toption group 'gA'\n\tlist cidrset '@/n/*'\n");
+}
+
 int main(void)
 {
 	char golden[1024], *want = NULL;
@@ -534,6 +561,7 @@ int main(void)
 	s_nul();
 	s_files();
 	s_big();
+	s_nearly_sorted();
 
 	snprintf(golden, sizeof(golden), "rm -rf '%s'", base);
 	if (system(golden))

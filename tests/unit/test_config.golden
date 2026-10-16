@@ -1612,3 +1612,22 @@ I config: 3 groups, 3 devices, 2 rules, 60000 prefixes (42 duplicates dropped)
   2a00:4e:1e::/48 gB r1
   2a00:4e:1f::/48 gB r1
   listing hash 5da491cf955d19d6
+
+== nearly sorted dumps: entries out of place, alone and in clumps
+D rule 'b': '@/n/b.lst' -> 5 prefixes
+D rule 'a': '@/n/*' -> 41173 prefixes
+W 7.0.0.0/8: claimed by rule 'b' (gB) and rule 'a' (gA), first one wins
+W 8.0.0.0/8: claimed by rule 'b' (gB) and rule 'a' (gA), first one wins
+W 9.0.0.0/8: claimed by rule 'b' (gB) and rule 'a' (gA), first one wins
+W 9.0.0.0/8: claimed by rule 'b' (gB) and rule 'a' (gA), first one wins
+W ::/0: claimed by rule 'b' (gB) and rule 'a' (gA), first one wins
+I config: 3 groups, 3 devices, 2 rules, 40013 prefixes (1165 duplicates dropped)
+-> 40013 prefixes
+  1.0.0.0/8 gA r1
+  2.0.0.0/8 gA r1
+  3.0.0.0/8 gA r1
+  ...
+  2a01:63:123::/48 gA r1
+  2a01:63:126::/48 gA r1
+  2a01:63:129::/48 gA r1
+  listing hash 20a2d11992f10ff8
