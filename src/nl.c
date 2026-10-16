@@ -23,6 +23,27 @@
 #define RECV_BUF_SIZE	(64 * 1024)
 #define MAX_LOGGED_ERRORS 16
 
+/*
+ * The batch is sent when a message takes it past BATCH_LIMIT, after that
+ * message was written: the buffer needs room for one more of the largest
+ * we build, a resilient group of MAX_NH_GROUP members (328 bytes; routes
+ * and rules stay under 100).
+ */
+#define MSG_MAX	512
+#define ATTR_SIZE(payload)	MNL_ALIGN(MNL_ATTR_HDRLEN + (payload))
+_Static_assert(MSG_MAX >= NLMSG_HDRLEN + NLMSG_ALIGN(sizeof(struct nhmsg)) +
+               ATTR_SIZE(4) +						/* NHA_ID */
+               ATTR_SIZE(MAX_NH_GROUP * sizeof(struct nexthop_grp)) +	/* NHA_GROUP */
+               ATTR_SIZE(2) +						/* NHA_GROUP_TYPE */
+               MNL_ATTR_HDRLEN + ATTR_SIZE(2) + 2 * ATTR_SIZE(4),	/* NHA_RES_GROUP */
+               "MSG_MAX too small for a full resilient group");
+
+/*
+ * RECV_BUF_SIZE: one datagram per recv. Dump skbs are at most 32 KB (the
+ * kernel caps what it learns from our buffer size at SKB_WITH_OVERHEAD(32
+ * KB)) unless one message needs more (min_dump_alloc); notifications and
+ * error replies are single messages. Pages never written to cost nothing.
+ */
 static char recv_buf[RECV_BUF_SIZE] __attribute__((aligned(4)));
 
 static void set_rcvbuf(struct mnl_socket *s)
@@ -90,7 +111,7 @@ int nl_open(struct nl *nl)
 	if (mnl_socket_bind(nl->ev, groups, MNL_SOCKET_AUTOPID) < 0)
 		goto fail;
 
-	nl->batch_buf = malloc(BATCH_LIMIT * 2);
+	nl->batch_buf = malloc(BATCH_LIMIT + MSG_MAX);
 	if (!nl->batch_buf)
 		goto fail;
 	nl->batch = mnl_nlmsg_batch_start(nl->batch_buf, BATCH_LIMIT);
