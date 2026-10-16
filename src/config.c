@@ -399,18 +399,19 @@ static int load_line(const char *path, unsigned lineno, const char *s, size_t le
 	return prefix_build_add(&pb[family == AF_INET6], addr, plen, rule);
 }
 
-static void load_list_file(const char *path, uint16_t rule, struct prefix_build *pb,
-                           size_t *n_bad)
+/* Returns -1 when out of memory: a partial list would drop the rest's routes. */
+static int load_list_file(const char *path, uint16_t rule, struct prefix_build *pb,
+                          size_t *n_bad)
 {
 	size_t have = 0, pos = 0;
 	unsigned lineno = 0;
 	bool eof = false;
-	int fd;
+	int fd, ret = 0;
 
 	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd < 0) {
 		warn("%s: %s", path, strerror(errno));
-		return;
+		return 0;
 	}
 
 	for (;;) {
@@ -444,10 +445,12 @@ static void load_list_file(const char *path, uint16_t rule, struct prefix_build 
 		pos += len;
 		if (load_line(path, ++lineno, line, len, rule, pb, n_bad)) {
 			err("out of memory");
+			ret = -1;
 			break;
 		}
 	}
 	close(fd);
+	return ret;
 }
 
 static int load_cidrset(const char *rule_name, const char *pattern, uint16_t rule,
@@ -467,8 +470,12 @@ static int load_cidrset(const char *rule_name, const char *pattern, uint16_t rul
 		return -1;
 	}
 
-	for (size_t i = 0; i < g.gl_pathc; i++)
-		load_list_file(g.gl_pathv[i], rule, pb, &n_bad);
+	for (size_t i = 0; i < g.gl_pathc; i++) {
+		if (load_list_file(g.gl_pathv[i], rule, pb, &n_bad)) {
+			globfree(&g);
+			return -1;
+		}
+	}
 	globfree(&g);
 
 	if (n_bad > 10)
