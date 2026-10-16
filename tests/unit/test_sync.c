@@ -38,7 +38,7 @@
  *   - the result equals the fresh install, foreign objects untouched
  *   - without a perturbation during the apply, it returns 0 and no request
  *     fails (expected ENOENT/ESRCH/EEXIST counted and reported); after a
- *     failure a SYNC_FULL repairs it, after a race the next sync does
+ *     failure a full sync repairs it, after a race the next sync does
  *   - after every single message: every prefix of both worlds' same group
  *     resolves (rules, fwmark, longest prefix, metric, nexthop, members) to
  *     a blackhole or that group's devices, never to nothing or another
@@ -2155,8 +2155,6 @@ struct tworld {
 	struct env env;
 	struct ifview ifs[MAXD];
 	bool member_up[MAXG * MAXM];
-	const char *netdev[MAXD];
-	char nd[MAXD][16];
 	struct world w;
 };
 
@@ -2171,20 +2169,18 @@ static void tw_make(struct tworld *t, struct tcfg *tc, const struct env *e)
 		for (size_t d = 0; d < c->n_devices; d++) {
 			for (int f = 0; f < 2; f++)
 				t->ifs[d].fam[f] = e->spec[tc->dev_spec[d]][f];
-			snprintf(t->nd[d], sizeof(t->nd[d]), "if%d", t->ifs[d].fam[0].ifindex);
-			t->netdev[d] = t->nd[d];
 		}
 		for (size_t g = 0; g < c->n_groups; g++)
 			for (size_t m = 0; m < c->groups[g].n_members; m++)
 				t->member_up[cfg_member_index(c, g, m)] =
 					e->up[tc->src.g[g].name][tc->dev_spec[c->groups[g].members[m].dev]];
 	}
-	t->w = (struct world){ tc ? &tc->c : NULL, t->ifs, t->netdev, t->member_up };
+	t->w = (struct world){ tc ? &tc->c : NULL, t->ifs, t->member_up };
 }
 
 static const struct world *tw_world(struct tworld *t)
 {
-	t->w = (struct world){ t->tc ? &t->tc->c : NULL, t->ifs, t->netdev, t->member_up };
+	t->w = (struct world){ t->tc ? &t->tc->c : NULL, t->ifs, t->member_up };
 	return &t->w;
 }
 
@@ -3257,7 +3253,7 @@ static struct sync *S_fresh;	/* fresh installs', apart from S, the one under tes
 static struct tworld empty_world;
 
 struct step_opts {
-	enum sync_mode mode;
+	bool full;
 	bool restart;		/* prev = nothing: a crash, then startup */
 	bool race;		/* a perturbation in the middle */
 	enum pkind race_kind;
@@ -3292,8 +3288,8 @@ static void report_step(struct tworld *prev, struct tworld *want)
 		fprintf(stderr, "    routebot said:\n%s", logbuf);
 }
 
-/* One apply with every invariant checked; mode and worlds as given. */
-static int apply(const struct world *sp, struct tworld *ip, struct tworld *w, enum sync_mode mode,
+/* One apply with every invariant checked; full or not, worlds as given. */
+static int apply(const struct world *sp, struct tworld *ip, struct tworld *w, bool full,
                  struct sync_stats *st)
 {
 	int ret;
@@ -3304,10 +3300,10 @@ static int apply(const struct world *sp, struct tworld *ip, struct tworld *w, en
 	targets_build(ip, w);
 	targets_baseline();
 	au.on = false;
-	if (mode == SYNC_FULL && !after_race)
+	if (full && !after_race)
 		audit_start(sp, w);
 	checking = true;
-	ret = sync_apply(S, &nl, sp, tw_world(w), mode, st);
+	ret = sync_apply(S, &nl, sp, tw_world(w), full, st);
 	checking = false;
 	au.on = false;
 	totals.applies++;
@@ -3338,7 +3334,7 @@ static void fresh_install(struct tworld *w, struct kernel *out)
 	K = out;
 	inv_prev = inv_want = NULL;
 	memset(&acc, 0, sizeof(acc));
-	ret = sync_apply(S_fresh, &nl, tw_world(&empty_world), tw_world(w), SYNC_FULL, &st);
+	ret = sync_apply(S_fresh, &nl, tw_world(&empty_world), tw_world(w), true, &st);
 	q_clear();
 	CHECK(!ret && acc.unexpected == acc.refused && (refusals() || !st.errors),
 	      "fresh install: returned %d, %u requests failed, %u errors", ret, acc.unexpected,
@@ -3388,9 +3384,9 @@ static struct step_result step(const char *what, struct tworld *prev, struct two
 	if (o->race)
 		totals.races++;
 
-	mlog("  apply (%s%s):\n", o->mode == SYNC_FULL ? "full" : "diff",
+	mlog("  apply (%s%s):\n", o->full ? "full" : "diff",
 	     o->restart ? ", restart" : "");
-	res.ret = apply(o->restart ? tw_world(&empty_world) : tw_world(prev), prev, want, o->mode,
+	res.ret = apply(o->restart ? tw_world(&empty_world) : tw_world(prev), prev, want, o->full,
 	                &st);
 	res.a = acc;
 	res.raced = race.hit;
@@ -3405,10 +3401,10 @@ static struct step_result step(const char *what, struct tworld *prev, struct two
 		CHECK(!(intact && !o->restart && prev->tc == want->tc && !refusals()) || !st.lost,
 		      "%u objects reported lost from an intact kernel", st.lost);
 		/* what the kernel refuses is asked again on every sync */
-		if (intact && !refusals() && o->mode == SYNC_DIFF && prev->tc == want->tc &&
+		if (intact && !refusals() && !o->full && prev->tc == want->tc &&
 		    !memcmp(&prev->env, &want->env, sizeof(prev->env)))
 			CHECK(!acc.msgs, "%u requests sent with nothing changed", acc.msgs);
-		if (intact && o->mode == SYNC_DIFF && prev->tc == want->tc) {
+		if (intact && !o->full && prev->tc == want->tc) {
 			bool only_up = true;
 
 			for (int s = 0; s < NSPEC; s++)
@@ -3423,23 +3419,23 @@ static struct step_result step(const char *what, struct tworld *prev, struct two
 				CHECK(!acc.prefix_msgs,
 				      "%u prefix route requests for member changes alone", acc.prefix_msgs);
 		}
-		if (at_want && !refusals() && o->mode == SYNC_FULL)
+		if (at_want && !refusals() && o->full)
 			CHECK(!acc.route_msgs, "%u route requests from a full sync of a kernel "
 			      "already equal to a fresh install", acc.route_msgs);
 	}
 
 	/* the next sync repairs what got in the way: a retry, or the event's */
 	if (res.ret || race.hit) {
-		enum sync_mode m = res.ret ? SYNC_FULL : SYNC_DIFF;
+		bool m = res.ret;
 		int ret;
 
 		totals.followups++;
-		mlog("  follow-up (%s):\n", m == SYNC_FULL ? "full" : "diff");
+		mlog("  follow-up (%s):\n", m ? "full" : "diff");
 		ret = apply(tw_world(want), want, want, m, &st);
-		if (ret && m == SYNC_DIFF) {
+		if (ret && !m) {
 			totals.full_retries++;
 			mlog("  follow-up (full):\n");
-			ret = apply(tw_world(want), want, want, SYNC_FULL, &st);
+			ret = apply(tw_world(want), want, want, true, &st);
 		}
 		CHECK(!ret && acc.unexpected == acc.refused && (refusals() || !st.errors),
 		      "follow-up sync returned %d, %u requests failed, %u errors", ret,
@@ -3479,7 +3475,7 @@ static void kernel_reset(void)
 
 static void begin(const char *name, struct tworld *w)
 {
-	struct step_opts o = { .mode = SYNC_FULL, .restart = true };
+	struct step_opts o = { .full = true, .restart = true };
 
 	snprintf(scenario, sizeof(scenario), "%s", name);
 	step_no = 0;
@@ -3552,8 +3548,8 @@ static struct tsrc base_src(void)
 #define EXPECT_MSGS(r, n) CHECK((r).skipped || (r).a.msgs == (n), \
 	"want %u requests, got %u", (unsigned)(n), (r).a.msgs)
 
-static const struct step_opts DIFF = { .mode = SYNC_DIFF };
-static const struct step_opts FULL = { .mode = SYNC_FULL };
+static const struct step_opts DIFF = { .full = false };
+static const struct step_opts FULL = { .full = true };
 
 /* Fresh install of a, then a -> b, optionally after perturbing the kernel. */
 static struct step_result pair(const char *name, struct tworld *a, struct tworld *b,
@@ -3674,7 +3670,7 @@ static void named_foreign_abort(const char *name, struct tworld *a, uint32_t id,
 	mlog("  apply (%s):\n", restart ? "full, restart" : "diff");
 	reference(a, &kref);
 	ret = apply(restart ? tw_world(&empty_world) : tw_world(a), a, a,
-	            restart ? SYNC_FULL : SYNC_DIFF, &st);
+	            restart, &st);
 	CHECK(ret == -1, "sync_apply returned %d with someone else's nexthop at id %u", ret, id);
 	CHECK(!acc.msgs, "%u requests with someone else's nexthop at id %u", acc.msgs, id);
 	report_step(a, a);
@@ -3746,9 +3742,9 @@ static void named(void)
 	r = pair("same config, foreign objects", &a, &a, pre_foreign, &DIFF);
 	EXPECT_MSGS(r, 0);
 	r = pair("restart, leftovers", &a, &a, pre_leftovers,
-	         &(struct step_opts){ .mode = SYNC_FULL, .restart = true });
+	         &(struct step_opts){ .full = true, .restart = true });
 	r = pair("restart, kernel intact", &a, &a, NULL,
-	         &(struct step_opts){ .mode = SYNC_FULL, .restart = true });
+	         &(struct step_opts){ .full = true, .restart = true });
 	CHECK(r.skipped || !r.a.route_msgs, "%u route requests", r.a.route_msgs);
 	r = pair("full sync, kernel intact", &a, &a, NULL, &FULL);
 	CHECK(r.skipped || !r.a.route_msgs, "%u route requests", r.a.route_msgs);
@@ -3904,7 +3900,7 @@ static void named(void)
 
 			/* and races spread over its requests, if it works without */
 			for (unsigned k = 0; k < 64 && fails == before; k += k < 4 ? 1 : k / 2) {
-				struct step_opts o = { .mode = SYNC_DIFF, .race = true, .race_at = k,
+				struct step_opts o = { .race = true, .race_at = k,
 				                       .race_kind = (enum pkind)((i + k) % P_N_ANYTIME) };
 
 				snprintf(name, sizeof(name), "reload, %s, %s at request %u", names[i],
@@ -3926,7 +3922,7 @@ static void named(void)
 	pair("refused, v6 disabled on one of a's members", &a, &a, pre_v6_off, &DIFF);
 	pair("refused, group b's only member", &a, &a, pre_gw_off, &DIFF);
 	pair("refused, at startup", &a, &a, pre_v6_off,
-	     &(struct step_opts){ .mode = SYNC_FULL, .restart = true });
+	     &(struct step_opts){ .full = true, .restart = true });
 	pair("refused, full sync", &a, &a, pre_gw_off, &FULL);
 	begin("refused, then taken again", &a);
 	pre_v6_off();
@@ -3964,7 +3960,7 @@ static void named(void)
 		char name[96];
 
 		snprintf(name, sizeof(name), "member leaves, group a deleted at request %u", k);
-		pair(name, &a, &b, NULL, &(struct step_opts){ .mode = SYNC_DIFF, .race = true,
+		pair(name, &a, &b, NULL, &(struct step_opts){ .race = true,
 		                                               .race_at = k, .race_kind = P_GROUP_A });
 	}
 
@@ -3989,7 +3985,7 @@ static void named(void)
 		pair("refused, 48 members and their probe routes at once", &w, &w, pre_all_refuse,
 		     &DIFF);
 		pair("refused, 48 members at once, at startup", &x, &w, pre_all_refuse,
-		     &(struct step_opts){ .mode = SYNC_FULL, .restart = true });
+		     &(struct step_opts){ .full = true, .restart = true });
 		free(c3);
 	}
 
@@ -4012,7 +4008,7 @@ static void named(void)
 		snprintf(name, sizeof(name), "restart, table_id %+d", shift);
 		pre_world = &a;
 		pair(name, &a, &b, pre_leftovers,
-		     &(struct step_opts){ .mode = SYNC_FULL, .restart = true });
+		     &(struct step_opts){ .full = true, .restart = true });
 		free(c2);
 	}
 
@@ -4292,11 +4288,11 @@ static void random_run(unsigned run, unsigned n_steps)
 	random_src(&src, 0);
 	tc = tcfg_build(&src);
 	tw_make(next, tc, &env);
-	step("startup", cur, next, &(struct step_opts){ .mode = SYNC_FULL, .restart = true });
+	step("startup", cur, next, &(struct step_opts){ .full = true, .restart = true });
 
 	for (unsigned i = 1; i < n_steps && fails == fails_before; i++) {
 		struct tworld *t;
-		struct step_opts o = { .mode = SYNC_DIFF };
+		struct step_opts o = { .full = false };
 		const char *what;
 		unsigned kind = rnd(100);
 		struct tcfg *ntc;
@@ -4328,7 +4324,7 @@ static void random_run(unsigned run, unsigned n_steps)
 			ntc = tcfg_build(&src);
 		} else if (kind < 82) {
 			what = "restart";
-			o.mode = SYNC_FULL;
+			o.full = true;
 			o.restart = true;
 			if (rnd(2)) {
 				mutate(&src, true);
@@ -4336,7 +4332,7 @@ static void random_run(unsigned run, unsigned n_steps)
 			}
 		} else if (kind < 90) {
 			what = "full";
-			o.mode = SYNC_FULL;
+			o.full = true;
 		} else {
 			what = "nothing new";
 		}
@@ -4345,7 +4341,7 @@ static void random_run(unsigned run, unsigned n_steps)
 		/* the kernel, behind routebot's back */
 		if (chance(45)) {
 			for (unsigned n = 1 + rnd(3); n; n--)
-				perturb(K, (enum pkind)rnd(o.mode == SYNC_FULL ? P_N : P_N_ANYTIME), cur);
+				perturb(K, (enum pkind)rnd(o.full ? P_N : P_N_ANYTIME), cur);
 		}
 		if (chance(15)) {
 			o.race = true;

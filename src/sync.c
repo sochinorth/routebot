@@ -482,7 +482,7 @@ struct diff {
 	size_t n_tables;		/* in s->tables */
 	uint32_t table;			/* the one being observed */
 	bool oom, no_nh;		/* observing ran out of memory; no nexthop objects */
-	enum sync_mode mode;
+	bool full;			/* prefix routes observed too */
 	struct sync_stats *st;
 };
 
@@ -1378,10 +1378,10 @@ static void small_routes_del(const struct diff *d, bool early)
 
 		if (!is_ours(d, k->proto))
 			continue;
-		if (early ? d->mode != SYNC_FULL || small_has(d->pw, k, route_eq) ||
+		if (early ? !d->full || small_has(d->pw, k, route_eq) ||
 		            (k->type == RTN_BLACKHOLE && !k->nh_id)
 		          : small_has(d->pw, k, route_key_eq) ||
-		            (d->mode != SYNC_FULL && idset_has(&d->s->doomed, k->nh_id)))
+		            (!d->full && idset_has(&d->s->doomed, k->nh_id)))
 			continue;
 		route_off(d->nl, early ? NL_SET : NL_DEL, k);
 		if (early)
@@ -1421,7 +1421,7 @@ static void rules_del(const struct diff *d, bool cidr)
 /* Set want's prefix routes the kernel hasn't as they are. */
 static void prefixes_fill(const struct diff *d)
 {
-	if (d->mode == SYNC_FULL)
+	if (d->full)
 		prefixes_full_set(d);
 	else
 		prefixes_set(d);
@@ -1464,11 +1464,11 @@ static unsigned groups_blackhole(struct diff *d)
 }
 
 int sync_apply(struct sync *s, struct nl *nl, const struct world *prev,
-               const struct world *want, enum sync_mode mode, struct sync_stats *st)
+               const struct world *want, bool full, struct sync_stats *st)
 {
 	struct diff d = {
 		.s = s, .nl = nl, .pc = prev->cfg, .wc = want->cfg, .k = &s->k,
-		.pw = &s->want, .pp = &s->prev, .st = st, .mode = mode,
+		.pw = &s->want, .pp = &s->prev, .st = st, .full = full,
 	};
 	struct scan sc = {};
 	unsigned uncertain = 0;
@@ -1479,7 +1479,7 @@ int sync_apply(struct sync *s, struct nl *nl, const struct world *prev,
 	set_protos(&d);
 	/* nothing believed, or a layout change: all of it observed */
 	if (!d.pc || layout_changes(d.pc, d.wc))
-		d.mode = SYNC_FULL;
+		d.full = true;
 
 	if (plan_build(want, &s->want) || plan_build(prev, &s->prev)) {
 		err("out of memory");
@@ -1507,7 +1507,7 @@ int sync_apply(struct sync *s, struct nl *nl, const struct world *prev,
 	}
 	log_lost(&d);
 
-	if (d.mode == SYNC_FULL) {
+	if (d.full) {
 		unsigned before = st->errors;
 
 		ret = scan_routes(&d, &sc);
@@ -1531,7 +1531,7 @@ int sync_apply(struct sync *s, struct nl *nl, const struct world *prev,
 	 */
 	nl_batch_begin(nl);
 	small_routes_set(&d, true);
-	if (d.mode == SYNC_FULL)
+	if (d.full)
 		prefixes_full_detach(&d);
 	else
 		prefixes_detach(&d);
@@ -1550,7 +1550,7 @@ int sync_apply(struct sync *s, struct nl *nl, const struct world *prev,
 	rules_del(&d, false);
 	small_routes_set(&d, false);
 	small_routes_del(&d, false);
-	if (d.mode == SYNC_FULL) {
+	if (d.full) {
 		uncertain += batch_end(&d);
 		info("reconcile: %zu prefix routes in place", st->kept);
 		if (sc.n_unwanted) {

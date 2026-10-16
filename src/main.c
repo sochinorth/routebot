@@ -73,7 +73,7 @@ void log_msg(int level, const char *fmt, ...)
 
 static struct world world_of(const struct snap *s)
 {
-	return (struct world){ s->cfg, s->ifs, s->netdev, s->member_up };
+	return (struct world){ s->cfg, s->ifs, s->member_up };
 }
 
 /* Frees the buffers, not s->cfg. */
@@ -305,13 +305,12 @@ static void sync_to(const char *why, bool full)
 {
 	const struct snap *s = &rb.spare;
 	struct world prev = world_of(&rb.applied), want = world_of(s);
-	enum sync_mode mode = full || !rb.certain || !prev.cfg ? SYNC_FULL : SYNC_DIFF;
 	struct sync_stats st = { 0 };
 	int ret;
 
 	log_changes(&rb.applied, s);
 	check_rp_filter(&rb.applied, s);
-	ret = sync_apply(rb.sync, &rb.nl, &prev, &want, mode, &st);
+	ret = sync_apply(rb.sync, &rb.nl, &prev, &want, full || !rb.certain || !prev.cfg, &st);
 	log_sync(why, &st, ret);
 	rb.live.dirty = false;
 	rb.live.poked = false;
