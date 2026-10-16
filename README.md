@@ -372,9 +372,7 @@ counters in a shared file. After each step the bench waits until routebot is
 idle: counters and CPU time unchanged for 300 ms, routebot in `epoll_wait`,
 no signal pending and no unread netlink data. `shutdown` (SIGTERM at the
 `end` until exit: the flush) reports allocations, CPU from the shim's record
-at exit, and wall time; nothing may be left behind. `validate.sh`
-cross-checks the shim against glibc's mtrace and strace and lists the big
-allocations with file:line.
+at exit, and wall time; nothing may be left behind.
 
 `compare.py` fails on a broken run, a different workload, or a regression of
 more than 10% in memory (per phase) or in allocations or bytes per unit,

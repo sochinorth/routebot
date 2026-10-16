@@ -1,4 +1,4 @@
-# Bench setup shared by bench.sh and validate.sh, sourced after tests/lib.sh
+# Bench setup for bench.sh, sourced after tests/lib.sh
 # with HERE (this directory), HOSTDEPS and PY set. Builds the mallocstat
 # shim ($SHIM), the topology, starts ubusd ($UBUSD, $UBUS), generates the
 # lists ($L) and writes $T/config. Sets V4, V6 and CONFLICTS from the
