@@ -1,0 +1,187 @@
+{
+ "memory": {
+  "after_10_reloads": {
+   "RssAnon_kB": 12224,
+   "RssFile_kB": 2136,
+   "RssShmem_kB": 0,
+   "VmData_kB": 15696,
+   "VmHWM_kB": 14360,
+   "VmRSS_kB": 14360,
+   "VmSize_kB": 18556,
+   "heap_live_kB": 5768,
+   "heap_peak_kB": 15384
+  },
+  "after_events": {
+   "RssAnon_kB": 4276,
+   "RssFile_kB": 2136,
+   "RssShmem_kB": 0,
+   "VmData_kB": 6100,
+   "VmHWM_kB": 10072,
+   "VmRSS_kB": 6412,
+   "VmSize_kB": 8960,
+   "heap_live_kB": 5772,
+   "heap_peak_kB": 9618
+  },
+  "after_reload": {
+   "RssAnon_kB": 8248,
+   "RssFile_kB": 2136,
+   "RssShmem_kB": 0,
+   "VmData_kB": 10324,
+   "VmHWM_kB": 14320,
+   "VmRSS_kB": 10384,
+   "VmSize_kB": 13184,
+   "heap_live_kB": 5772,
+   "heap_peak_kB": 15384
+  },
+  "end": {
+   "RssAnon_kB": 12232,
+   "RssFile_kB": 2136,
+   "RssShmem_kB": 0,
+   "VmData_kB": 15700,
+   "VmHWM_kB": 14368,
+   "VmRSS_kB": 14368,
+   "VmSize_kB": 18560,
+   "heap_live_kB": 5768,
+   "heap_peak_kB": 15384
+  },
+  "startup": {
+   "RssAnon_kB": 4276,
+   "RssFile_kB": 2136,
+   "RssShmem_kB": 0,
+   "VmData_kB": 6100,
+   "VmHWM_kB": 10072,
+   "VmRSS_kB": 6412,
+   "VmSize_kB": 8960,
+   "heap_live_kB": 5772,
+   "heap_peak_kB": 9618
+  }
+ },
+ "meta": {
+  "binary": "/home/sochinorth/routebot/.claude/worktrees/agent-addf44964e9ecd472/build-trunk/build-gate-release/routebot",
+  "binary_sha256": "3d0e0495ac3c578dad6a12c5fb7985cb86b4944a9556f0842a3130cb43232f90",
+  "date": "2026-10-16T05:19:51Z",
+  "exit_status": "0",
+  "kernel": "6.18.40.1-microsoft-standard-WSL2",
+  "libc": "glibc 2.44",
+  "log_samples": {
+   "blackhole_flip_in": "sync (link event): 5002 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted",
+   "blackhole_flip_out": "sync (link event): 5002 routes set, 0 deleted, 0 nexthops set, 4 deleted, 0 rules added, 0 deleted",
+   "member_flip_in": "sync (link event): 0 routes set, 0 deleted, 4 nexthops set, 0 deleted, 0 rules added, 0 deleted",
+   "member_flip_out": "sync (link event): 0 routes set, 0 deleted, 2 nexthops set, 2 deleted, 0 rules added, 0 deleted",
+   "reload_small": "sync (reload): 100 routes set, 100 deleted, 0 nexthops set, 0 deleted, 0 rules added, 0 deleted",
+   "startup": "sync (startup): 179283 routes set, 0 deleted, 22 nexthops set, 0 deleted, 10 rules added, 0 deleted"
+  },
+  "machine": "x86_64",
+  "n": 50,
+  "phases": [
+   "startup",
+   "after_events",
+   "after_reload",
+   "after_10_reloads",
+   "end"
+  ],
+  "quiet_ms": 300,
+  "routes_installed": {
+   "v4": 157305,
+   "v6": 21970
+  },
+  "ubus": true,
+  "units": [
+   "link_noop",
+   "member_flip",
+   "blackhole_flip",
+   "reload_noop",
+   "reload_small"
+  ]
+ },
+ "ok": true,
+ "schema": 1,
+ "shutdown": {
+  "allocs": 13,
+  "bytes": 29352960,
+  "heap_live_at_exit_B": 4104
+ },
+ "units": {
+  "blackhole_flip": {
+   "allocs": 44.0,
+   "bytes": 36796.0,
+   "cpu_ms": 22.4,
+   "frees": 44.0,
+   "n": 50,
+   "reallocs": 2.0,
+   "sched_cpu_ms": 22.3771362,
+   "sys_ms": 17.2,
+   "user_ms": 5.2,
+   "wall_ms": 259.31419372558594
+  },
+  "link_noop": {
+   "allocs": 21.0,
+   "bytes": 1456.0,
+   "cpu_ms": 0.0,
+   "frees": 21.0,
+   "n": 50,
+   "reallocs": 1.0,
+   "sched_cpu_ms": 0.059934320000000006,
+   "sys_ms": 0.0,
+   "user_ms": 0.0,
+   "wall_ms": 60.506324768066406
+  },
+  "member_flip": {
+   "allocs": 44.0,
+   "bytes": 36804.0,
+   "cpu_ms": 236.2,
+   "frees": 44.0,
+   "n": 50,
+   "reallocs": 2.0,
+   "sched_cpu_ms": 236.28860002000002,
+   "sys_ms": 231.6,
+   "user_ms": 4.6,
+   "wall_ms": 466.87675952911377
+  },
+  "reload_noop": {
+   "allocs": 201.0,
+   "bytes": 15732711.0,
+   "cpu_ms": 31.6,
+   "frees": 201.0,
+   "n": 50,
+   "reallocs": 20.0,
+   "sched_cpu_ms": 31.47517566,
+   "sys_ms": 1.8,
+   "user_ms": 29.8,
+   "wall_ms": 123.21840763092041
+  },
+  "reload_small": {
+   "allocs": 201.0,
+   "bytes": 15732711.0,
+   "cpu_ms": 31.6,
+   "frees": 201.0,
+   "n": 50,
+   "reallocs": 20.0,
+   "sched_cpu_ms": 31.82788604,
+   "sys_ms": 1.2,
+   "user_ms": 30.4,
+   "wall_ms": 123.89245510101318
+  },
+  "startup": {
+   "allocs": 232.0,
+   "bytes": 15864291.0,
+   "cpu_ms": 360.0,
+   "frees": 191.0,
+   "n": 1,
+   "reallocs": 38.0,
+   "sched_cpu_ms": 365.007588,
+   "sys_ms": 330.0,
+   "user_ms": 30.0,
+   "wall_ms": 434.4627857208252
+  }
+ },
+ "workload": {
+  "conflicts": 225,
+  "lines": 186620,
+  "routes": {
+   "v4": 157305,
+   "v6": 21970
+  },
+  "sha256": "4d970bc2e11436015c66c25ac958a9d9e45361a5f987a32f99fcac9b19ccaa15"
+ }
+}
