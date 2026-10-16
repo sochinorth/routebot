@@ -526,26 +526,20 @@ static bool k_has_route(const struct diff *d, const struct route_spec *r)
 	return false;
 }
 
-static bool k_has_rule(const struct diff *d, const struct rule_spec *r)
+static bool rule_in(const struct rule_spec *rs, size_t n, const struct rule_spec *r)
 {
-	for (size_t i = 0; i < d->k->n_rules; i++)
-		if (rule_eq(r, &d->k->rules[i]))
+	for (size_t i = 0; i < n; i++)
+		if (rule_eq(&rs[i], r))
 			return true;
 	return false;
 }
 
-static bool plan_has_rule(const struct plan *p, const struct rule_spec *r)
-{
-	for (size_t i = 0; i < p->n_rules; i++)
-		if (rule_eq(&p->rules[i], r))
-			return true;
-	return false;
-}
-
-static bool small_key_wanted(const struct plan *p, const struct kroute *k)
+/* Whether p has a small route eq() to k: route_eq() or route_key_eq(). */
+static bool small_has(const struct plan *p, const struct kroute *k,
+                      bool (*eq)(const struct route_spec *, const struct kroute *))
 {
 	for (size_t i = 0; i < p->n_small; i++)
-		if (route_key_eq(&p->small[i], k))
+		if (eq(&p->small[i], k))
 			return true;
 	return false;
 }
@@ -973,7 +967,7 @@ static bool route_unwanted(const struct diff *d, const struct kroute *k)
 {
 	int f;
 
-	return !observed_table(d, k->r.table) && !small_key_wanted(d->pw, k) &&
+	return !observed_table(d, k->r.table) && !small_has(d->pw, k, route_key_eq) &&
 	       wanted_prefix(d->wc, k, &f) < 0;
 }
 
@@ -1008,7 +1002,7 @@ static int scan_cb(const struct nlmsghdr *nlh, void *data)
 		return MNL_CB_OK;
 	i = wanted_prefix(d->wc, &k, &f);
 	if (i < 0) {
-		if (small_key_wanted(d->pw, &k))
+		if (small_has(d->pw, &k, route_key_eq))
 			return MNL_CB_OK;
 		sc->n_unwanted++;
 		sc->n_unwanted_off += unwanted_off(d, &k);
@@ -1310,7 +1304,7 @@ static void log_lost(const struct diff *d)
 	for (size_t i = 0; i < pw->n_rules; i++) {
 		const struct rule_spec *r = &pw->rules[i];
 
-		if (k_has_rule(d, r) || !plan_has_rule(pp, r))
+		if (rule_in(d->k->rules, d->k->n_rules, r) || !rule_in(pp->rules, pp->n_rules, r))
 			continue;
 		info("kernel lost the %s rule at %u, restoring", fam_name(r->family == AF_INET6),
 		     r->prio);
@@ -1397,14 +1391,6 @@ static void small_routes_set(const struct diff *d, bool blackholes)
 	}
 }
 
-static bool small_wanted(const struct plan *p, const struct kroute *k)
-{
-	for (size_t i = 0; i < p->n_small; i++)
-		if (route_eq(&p->small[i], k))
-			return true;
-	return false;
-}
-
 /*
  * Routebot's routes in the observed tables. A full reconcile trusts
  * nothing: there, any that isn't want's becomes a blackhole first (early),
@@ -1420,9 +1406,9 @@ static void small_routes_del(const struct diff *d, bool early)
 
 		if (!is_ours(d, k->r.proto))
 			continue;
-		if (early ? d->mode != SYNC_FULL || small_wanted(d->pw, k) ||
+		if (early ? d->mode != SYNC_FULL || small_has(d->pw, k, route_eq) ||
 		            (k->r.type == RTN_BLACKHOLE && !k->r.nh_id)
-		          : small_key_wanted(d->pw, k) ||
+		          : small_has(d->pw, k, route_key_eq) ||
 		            (d->mode != SYNC_FULL && idset_has(&d->s->doomed, k->r.nh_id)))
 			continue;
 		kroute_key(k, &key);
@@ -1437,7 +1423,7 @@ static void small_routes_del(const struct diff *d, bool early)
 static void rules_add(const struct diff *d)
 {
 	for (size_t i = 0; i < d->pw->n_rules; i++)
-		if (!k_has_rule(d, &d->pw->rules[i])) {
+		if (!rule_in(d->k->rules, d->k->n_rules, &d->pw->rules[i])) {
 			nl_rule(d->nl, NL_SET, &d->pw->rules[i]);
 			d->st->rule_add++;
 		}
@@ -1455,7 +1441,7 @@ static void rules_del(const struct diff *d, bool cidr)
 	for (size_t i = 0; i < d->k->n_rules; i++) {
 		const struct rule_spec *r = &d->k->rules[i];
 
-		if (!is_ours(d, r->proto) || plan_has_rule(d->pw, r) ||
+		if (!is_ours(d, r->proto) || rule_in(d->pw->rules, d->pw->n_rules, r) ||
 		    (r->table == d->wc->table_id) != cidr)
 			continue;
 		nl_rule(d->nl, NL_DEL, r);
