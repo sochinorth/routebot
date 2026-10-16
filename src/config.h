@@ -109,7 +109,7 @@ static inline size_t config_n_prefixes(const struct config *c)
 /* Formats prefix i into buf, sets *rule to its owning rule, returns its group. */
 static inline size_t config_prefix(const struct config *c, size_t i, char *buf, size_t *rule)
 {
-	prefix_fmt(&c->prefixes[i], buf);
+	prefix_fmt(c->prefixes[i].family, c->prefixes[i].addr, c->prefixes[i].plen, buf);
 	*rule = c->prefixes[i].rule;
 	return c->prefixes[i].group;
 }

@@ -1,9 +1,11 @@
 #include <arpa/inet.h>
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <glob.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <uci.h>
 
@@ -369,58 +371,104 @@ static int parse_group(struct uci_context *ctx, struct uci_section *s, struct co
 	return 0;
 }
 
+/*
+ * List files are read through one window, each line scanned once. A line is
+ * cut every 511 bytes, as the fgets() with a 512-byte buffer this replaced
+ * did: the rest of an over-long line is a line of its own.
+ */
+#define LIST_WINDOW	65536
+#define LIST_LINE	511
+
+static char list_window[LIST_WINDOW];
+
+/* One line of len bytes (with its newline, if any). Returns -1 when out of memory. */
+static int load_line(const char *path, unsigned lineno, const char *s, size_t len,
+                     uint16_t group, uint16_t rule, struct prefix_vec *out, size_t *n_bad)
+{
+	struct prefix p = { .group = group, .rule = rule };
+	const char *e;
+	bool masked;
+	int family;
+
+	/* as C strings: a NUL ends the line, then '#' does */
+	e = memchr(s, '\0', len);
+	if (e)
+		len = e - s;
+	e = memchr(s, '#', len);
+	e = e ? e : s + len;
+	for (; s < e && isspace((unsigned char)*s); s++)
+		;
+	for (; e > s && isspace((unsigned char)e[-1]); e--)
+		;
+	if (s == e)
+		return 0;
+
+	family = cidr_parse(s, e - s, p.addr, &p.plen, &masked);
+	if (family < 0) {
+		if ((*n_bad)++ < 10)
+			warn("%s:%u: invalid CIDR '%.*s', skipped", path, lineno, (int)(e - s), s);
+		return 0;
+	}
+	if (masked) {
+		char buf[PREFIX_STRLEN];
+
+		if ((*n_bad)++ < 10)
+			warn("%s:%u: '%.*s' has host bits set, using %s", path, lineno,
+			     (int)(e - s), s, prefix_fmt(family, p.addr, p.plen, buf));
+	}
+	p.family = family;
+	return prefix_vec_push(out, &p);
+}
+
 static void load_list_file(const char *path, uint16_t group, uint16_t rule,
                            struct prefix_vec *out, size_t *n_bad)
 {
-	char line[512];
+	size_t have = 0, pos = 0;
 	unsigned lineno = 0;
-	FILE *f;
+	bool eof = false;
+	int fd;
 
-	f = fopen(path, "r");
-	if (!f) {
+	fd = open(path, O_RDONLY | O_CLOEXEC);
+	if (fd < 0) {
 		warn("%s: %s", path, strerror(errno));
 		return;
 	}
 
-	while (fgets(line, sizeof(line), f)) {
-		struct prefix p;
-		bool masked;
-		char *s, *e;
+	for (;;) {
+		const char *line = list_window + pos, *nl;
+		size_t avail = have - pos, len;
 
-		lineno++;
-		s = strchr(line, '#');
-		if (s)
-			*s = '\0';
-		for (s = line; isspace((unsigned char)*s); s++)
-			;
-		for (e = s + strlen(s); e > s && isspace((unsigned char)e[-1]); e--)
-			;
-		*e = '\0';
-		if (!*s)
-			continue;
+		nl = memchr(line, '\n', avail < LIST_LINE ? avail : LIST_LINE);
+		if (nl) {
+			len = nl - line + 1;
+		} else if (avail >= LIST_LINE) {
+			len = LIST_LINE;
+		} else if (eof) {
+			if (!avail)
+				break;
+			len = avail;
+		} else {
+			ssize_t r;
 
-		if (cidr_parse(s, &p, &masked)) {
-			if ((*n_bad)++ < 10)
-				warn("%s:%u: invalid CIDR '%s', skipped", path, lineno, s);
+			memmove(list_window, line, avail);
+			have = avail;
+			pos = 0;
+			r = read(fd, list_window + have, sizeof(list_window) - have);
+			if (r < 0 && errno == EINTR)
+				continue;
+			if (r < 0)
+				break;	/* like fgets: a read error ends the file, quietly */
+			eof = !r;
+			have += r;
 			continue;
 		}
-		if (masked) {
-			char buf[PREFIX_STRLEN];
-
-			if ((*n_bad)++ < 10)
-				warn("%s:%u: '%s' has host bits set, using %s",
-				     path, lineno, s, prefix_fmt(&p, buf));
-		}
-
-		p.group = group;
-		p.rule = rule;
-		if (prefix_vec_push(out, &p)) {
+		pos += len;
+		if (load_line(path, ++lineno, line, len, group, rule, out, n_bad)) {
 			err("out of memory");
 			break;
 		}
 	}
-
-	fclose(f);
+	close(fd);
 }
 
 static int load_cidrset(const char *rule_name, const char *pattern, uint16_t group,

@@ -16,10 +16,13 @@ struct prefix {
 	uint8_t addr[16];
 };
 
-/* Parse "addr[/plen]". Host bits are cleared; *masked tells whether any were set. */
-int cidr_parse(const char *s, struct prefix *p, bool *masked);
+/*
+ * Parse "addr[/plen]" from s[0..len). Returns AF_INET or AF_INET6, -1 if
+ * invalid. Host bits are cleared; *masked tells whether any were set.
+ */
+int cidr_parse(const char *s, size_t len, uint8_t addr[16], uint8_t *plen, bool *masked);
 
-const char *prefix_fmt(const struct prefix *p, char *buf);
+const char *prefix_fmt(int family, const uint8_t *addr, uint8_t plen, char *buf);
 
 static inline size_t family_alen(int family)
 {
