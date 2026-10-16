@@ -399,7 +399,10 @@ static int load_line(const char *path, unsigned lineno, const char *s, size_t le
 	return prefix_build_add(&pb[family == AF_INET6], addr, plen, rule);
 }
 
-/* Returns -1 when out of memory: a partial list would drop the rest's routes. */
+/*
+ * Returns -1 when out of memory or on a read error: a partial list would
+ * drop the rest's routes.
+ */
 static int load_list_file(const char *path, uint16_t rule, struct prefix_build *pb,
                           size_t *n_bad)
 {
@@ -436,8 +439,16 @@ static int load_list_file(const char *path, uint16_t rule, struct prefix_build *
 			r = read(fd, list_window + have, sizeof(list_window) - have);
 			if (r < 0 && errno == EINTR)
 				continue;
-			if (r < 0)
-				break;	/* like fgets: a read error ends the file, quietly */
+			if (r < 0 && errno == EISDIR && !lineno) {
+				/* a glob may match a subdirectory: not an error */
+				warn("%s: is a directory, skipped", path);
+				break;
+			}
+			if (r < 0) {
+				err("%s: %s", path, strerror(errno));
+				ret = -1;
+				break;
+			}
 			eof = !r;
 			have += r;
 			continue;

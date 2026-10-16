@@ -1400,6 +1400,7 @@ I config: 3 groups, 3 devices, 1 rules, 2 prefixes (0 duplicates dropped)
   2.0.0.0/8 gA r0
 
 == empty files, comment-only files, a directory, no match, no cidrset
+W @/e/4-dir: is a directory, skipped
 D rule 'r0': '@/e/*' -> 2 prefixes
 I rule 'r0': cidrset '@/nothing/*.lst' matches nothing
 W config: rule 'r1' has no cidrset
