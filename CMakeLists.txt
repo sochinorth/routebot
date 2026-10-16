@@ -67,8 +67,8 @@ if(ROUTEBOT_UNIT_TESTS)
 		if(ROUTEBOT_DEFS)
 			target_compile_definitions(${name} PRIVATE ${ROUTEBOT_DEFS})
 		endif()
-		# test_config_oom fails reallocs on purpose
-		if(name STREQUAL "test_config_oom")
+		# test_config_fail fails reallocs on purpose
+		if(name STREQUAL "test_config_fail")
 			target_link_options(${name} PRIVATE -Wl,--wrap=realloc)
 		endif()
 		add_test(NAME ${name} COMMAND ${name})
