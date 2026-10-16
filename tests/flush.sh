@@ -98,11 +98,11 @@ hasnt "32765:	from all fwmark 0x5 lookup 300 proto 233" ip -6 rule
 foreign
 
 echo "== exit flush: routebot's own state goes"
-has "default nhid 10003 dev vpn0 proto 233" ip route show table 10002
+has "default nhid 10004 dev vpn0 proto 233" ip route show table 10002
 has "blackhole default proto 233 metric 4294967295" ip route show table 10002
 has "blackhole default dev lo proto 233 metric 4294967295 pref medium" ip -6 route show table 10002
-has "id 9999 blackhole proto 233" ip nexthop show
 has "id 10000 blackhole proto 233" ip nexthop show
+has "id 10001 blackhole proto 233" ip nexthop show
 # what the exit flush has to delete one by one: routes not on a group,
 # the blackholes behind the group table's defaults
 mark

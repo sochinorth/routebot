@@ -25,23 +25,23 @@ $ ip rule
 10004:  from all fwmark 0x20000000/0xff000000 lookup 10004 proto 233
 
 $ ip route show table 10004
-default nhid 10011 proto 233
+default nhid 10012 proto 233
 	nexthop dev vpn_mullvad_se1 weight 1
 	nexthop dev vpn_mullvad_se2 weight 2
 	nexthop dev vpn_mullvad_se3 weight 1
 blackhole default proto 233 metric 4294967295
 
 $ ip route show table 10000
-1.0.0.0/24 nhid 10003 dev vpn_warp_dme proto 233
-1.1.1.0/24 nhid 10003 dev vpn_warp_dme proto 233
+1.0.0.0/24 nhid 10004 dev vpn_warp_dme proto 233
+1.1.1.0/24 nhid 10004 dev vpn_warp_dme proto 233
 ...
 
 $ ip nexthop show proto 233
-id 10011 group 10009/10013,2/10017 type resilient buckets 512 idle_timer 120 unbalanced_timer 600 ...
-id 10009 dev vpn_mullvad_se1 scope host proto 233
+id 10012 group 10010/10014,2/10018 type resilient buckets 512 idle_timer 120 unbalanced_timer 600 ...
+id 10010 dev vpn_mullvad_se1 scope host proto 233
 ...
-id 9999 blackhole proto 233
 id 10000 blackhole proto 233
+id 10001 blackhole proto 233
 ```
 
 With `pppoe-wan` down, group `wan` holds the blackhole instead of its member,
@@ -49,11 +49,11 @@ and its routes drop the traffic:
 
 ```
 $ ip route show table 10003
-blackhole default nhid 10007 dev lo proto 233
+blackhole default nhid 10008 dev lo proto 233
 blackhole default proto 233 metric 4294967295
 
-$ ip nexthop show id 10007
-id 10007 group 9999 type resilient buckets 1024 idle_timer 120 unbalanced_timer 600 ...
+$ ip nexthop show id 10008
+id 10008 group 10000 type resilient buckets 1024 idle_timer 120 unbalanced_timer 600 ...
 ```
 
 | | table | rule prio | matches |
@@ -76,10 +76,10 @@ distinct fwmark, so their order doesn't matter.
 - **Probe traffic** only comes from routebot itself (see Probes).
 
 Groups are nexthop objects over one nexthop per member device and family.
-Ids come in blocks of four: device d gets `nexthop_id + 1 + 4d + f` and group
-g gets `nexthop_id + 3 + 4g + f`, with d and g 0-based in order of first
-appearance and f the family (0 = v4, 1 = v6). The blackhole nexthops take
-group slot -1, `nexthop_id - 1 + f`. Each id depends only on its own
+Ids start at `nexthop_id` and come in blocks of four: the blackhole nexthops
+get `nexthop_id + f`, device d gets `nexthop_id + 2 + 4d + f` and group g
+gets `nexthop_id + 4 + 4g + f`, with d and g 0-based in order of first
+appearance and f the family (0 = v4, 1 = v6). Each id depends only on its own
 position, so adding or removing a group at the end doesn't renumber the rest.
 
 Every group exists at all times, per family: with its usable members, or
@@ -95,7 +95,7 @@ down and came back before routebot looked has everything re-sent.
 Everything is applied for both IPv4 and IPv6. Every rule, route and nexthop is
 tagged with `rt_proto`, so routebot can clean up after itself. On exit it
 removes all of it, and on startup it removes anything left behind by a crash.
-It refuses to start if a nexthop id in its range (`nexthop_id - 1` to the
+It refuses to start if a nexthop id in its range (`nexthop_id` to the
 last device or group) belongs to someone else.
 
 ## Configuration
@@ -110,7 +110,7 @@ config routebot
 	option rule_prio   '10000'       # CIDR rule; +1 probes; +1+N group N
 	option gw_table    'main'        # where gateways are learned from
 	option rt_proto    '233'         # protocol tag on everything routebot owns
-	option nexthop_id  '10000'       # nexthop ids: from this - 1 on (>= 2)
+	option nexthop_id  '10000'       # nexthop ids: from this on (>= 1)
 	option probe_mark  '0xfe'        # fwmark reserved for probes
 	option buckets     '1024'        # resilient group defaults,
 	option timer_idle  '120'         #   overridable per group (seconds)

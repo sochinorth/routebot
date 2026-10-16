@@ -174,8 +174,8 @@ unit_link_flap() {
 	expect "sync (link "
 	[ "$1" = 0 ] && sample link_flap
 	quiesce unit:link_flap "$S"
-	# p2 (10013, 10014) is back in pool (10011, 10012)
-	for _g in "10011 group 10009/10013,2/10017" "10012 group 10010/10014,2/10018"; do
+	# p2 (10014, 10015) is back in pool (10012, 10013)
+	for _g in "10012 group 10010/10014,2/10018" "10013 group 10011/10015,2/10019"; do
 		ip nexthop show id "${_g%% *}" | grep -q "^id $_g " ||
 			fail "link_flap: want id $_g, got: $(ip nexthop show id "${_g%% *}" 2>&1)"
 	done
