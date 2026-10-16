@@ -122,22 +122,14 @@ void nl_close(struct nl *nl);
 int nl_dump(struct nl *nl, struct nlmsghdr *req, mnl_cb_t cb, void *data);
 
 /*
- * Dump all nexthop objects. cb gets each RTM_NEWNEXTHOP message.
- * Returns 0, -errno, or -EOPNOTSUPP if the kernel lacks nexthop objects.
+ * Dump every v4 and v6 object of type RTM_GETNEXTHOP, RTM_GETRULE or
+ * RTM_GETROUTE; cb gets each message. Routes are filtered in the kernel
+ * (NETLINK_GET_STRICT_CHK) by table (0 = every table) and proto (0 = any),
+ * RTM_F_CLONED ones included (nl_parse_route rejects them). Returns 0 or
+ * -errno, -EOPNOTSUPP for nexthops if the kernel lacks nexthop objects.
  */
-int nl_dump_nexthops(struct nl *nl, mnl_cb_t cb, void *data);
-
-/*
- * Dump routes, filtered in the kernel (NETLINK_GET_STRICT_CHK): family
- * (AF_UNSPEC = both), table (0 = every table), proto (0 = any). cb gets
- * each RTM_NEWROUTE message, RTM_F_CLONED ones included (use nl_parse_route
- * and skip what it rejects). Returns 0 or -errno.
- */
-int nl_dump_routes(struct nl *nl, uint8_t family, uint32_t table, uint8_t proto,
-                   mnl_cb_t cb, void *data);
-
-/* Dump all v4 and v6 rules. cb gets each RTM_NEWRULE message. Returns 0 or -errno. */
-int nl_dump_rules(struct nl *nl, mnl_cb_t cb, void *data);
+int nl_dump_type(struct nl *nl, uint16_t type, uint32_t table, uint8_t proto, mnl_cb_t cb,
+                 void *data);
 
 /*
  * Writes are queued into a batch and sent in large sendmsg() chunks.

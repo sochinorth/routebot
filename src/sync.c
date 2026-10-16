@@ -618,19 +618,19 @@ static int observe(struct diff *d)
 
 	k->n_nh = k->n_rules = k->n_routes = d->n_tables = 0;
 	d->oom = d->no_nh = false;
-	ret = nl_dump_nexthops(d->nl, observe_nh_cb, d);
+	ret = nl_dump_type(d->nl, RTM_GETNEXTHOP, 0, 0, observe_nh_cb, d);
 	if (ret == -EOPNOTSUPP) {
 		d->no_nh = true;
 		ret = 0;
 	}
 	if (!ret)
-		ret = nl_dump_rules(d->nl, observe_rule_cb, d);
+		ret = nl_dump_type(d->nl, RTM_GETRULE, 0, 0, observe_rule_cb, d);
 	if (!ret && (add_tables(d, d->wc) || add_tables(d, d->pc)))
 		ret = -ENOMEM;
 	for (size_t i = 0; !ret && i < d->n_tables; i++) {
 		d->table = d->s->tables[i];
-		ret = nl_dump_routes(d->nl, AF_UNSPEC, d->table,
-		                     d->n_protos == 1 ? d->protos[0] : 0, observe_route_cb, d);
+		ret = nl_dump_type(d->nl, RTM_GETROUTE, d->table,
+		                   d->n_protos == 1 ? d->protos[0] : 0, observe_route_cb, d);
 	}
 	return ret ? ret : d->oom ? -ENOMEM : 0;
 }
@@ -1053,7 +1053,7 @@ static int scan_routes(const struct diff *d, struct scan *sc)
 	memset(sc, 0, sizeof(*sc));
 	sc->d = d;
 	for (size_t p = 0; p < d->n_protos; p++) {
-		ret = nl_dump_routes(d->nl, AF_UNSPEC, 0, d->protos[p], scan_cb, sc);
+		ret = nl_dump_type(d->nl, RTM_GETROUTE, 0, d->protos[p], scan_cb, sc);
 		if (ret)
 			return ret;
 	}
@@ -1103,7 +1103,7 @@ static int sweep_run(struct sweep *sw, size_t *n_done, size_t *n_left, unsigned 
 
 		sw->n_sent = 0;
 		nl_batch_begin(nl);
-		ret = nl_dump_routes(nl, AF_UNSPEC, 0, sw->proto, sweep_cb, sw);
+		ret = nl_dump_type(nl, RTM_GETROUTE, 0, sw->proto, sweep_cb, sw);
 		*errors += nl_batch_end(nl);
 		if (ret)
 			return ret;

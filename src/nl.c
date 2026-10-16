@@ -183,48 +183,25 @@ int nl_dump(struct nl *nl, struct nlmsghdr *req, mnl_cb_t cb, void *data)
 	return 0;
 }
 
-int nl_dump_nexthops(struct nl *nl, mnl_cb_t cb, void *data)
+int nl_dump_type(struct nl *nl, uint16_t type, uint32_t table, uint8_t proto, mnl_cb_t cb,
+                 void *data)
 {
 	char buf[128] __attribute__((aligned(4)));
 	struct nlmsghdr *nlh = mnl_nlmsg_put_header(buf);
-	struct nhmsg *nhm;
+	size_t hdr = type == RTM_GETNEXTHOP ? sizeof(struct nhmsg) :
+	             type == RTM_GETRULE ? sizeof(struct fib_rule_hdr) : sizeof(struct rtmsg);
+	/* zeroed, family AF_UNSPEC: strict checking wants no more of nexthop and rule dumps */
+	struct rtmsg *rtm = mnl_nlmsg_put_extra_header(nlh, hdr);
 
-	/* a kernel without nexthop objects answers -EOPNOTSUPP itself */
-	nlh->nlmsg_type = RTM_GETNEXTHOP;
-	/* strict checking: everything but the family must be zero */
-	nhm = mnl_nlmsg_put_extra_header(nlh, sizeof(*nhm));
-	nhm->nh_family = AF_UNSPEC;
-	return nl_dump(nl, nlh, cb, data);
-}
-
-int nl_dump_routes(struct nl *nl, uint8_t family, uint32_t table, uint8_t proto,
-                   mnl_cb_t cb, void *data)
-{
-	char buf[128] __attribute__((aligned(4)));
-	struct nlmsghdr *nlh = mnl_nlmsg_put_header(buf);
-	struct rtmsg *rtm;
-
-	/* with NETLINK_GET_STRICT_CHK the kernel filters by table and protocol */
-	nlh->nlmsg_type = RTM_GETROUTE;
-	rtm = mnl_nlmsg_put_extra_header(nlh, sizeof(*rtm));
-	rtm->rtm_family = family;
-	rtm->rtm_protocol = proto;
-	if (table) {
-		rtm->rtm_table = table < 256 ? table : RT_TABLE_UNSPEC;
-		mnl_attr_put_u32(nlh, RTA_TABLE, table);
+	nlh->nlmsg_type = type;
+	if (type == RTM_GETROUTE) {
+		/* with NETLINK_GET_STRICT_CHK the kernel filters by table and protocol */
+		rtm->rtm_protocol = proto;
+		if (table) {
+			rtm->rtm_table = table < 256 ? table : RT_TABLE_UNSPEC;
+			mnl_attr_put_u32(nlh, RTA_TABLE, table);
+		}
 	}
-	return nl_dump(nl, nlh, cb, data);
-}
-
-int nl_dump_rules(struct nl *nl, mnl_cb_t cb, void *data)
-{
-	char buf[128] __attribute__((aligned(4)));
-	struct nlmsghdr *nlh = mnl_nlmsg_put_header(buf);
-	struct fib_rule_hdr *frh;
-
-	nlh->nlmsg_type = RTM_GETRULE;
-	frh = mnl_nlmsg_put_extra_header(nlh, sizeof(*frh));
-	frh->family = AF_UNSPEC;
 	return nl_dump(nl, nlh, cb, data);
 }
 
