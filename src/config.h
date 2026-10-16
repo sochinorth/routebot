@@ -100,6 +100,20 @@ static inline uint64_t cfg_nhid_end(const struct config *c)
 	return (uint64_t)c->nexthop_id + (d > g ? d : g);
 }
 
+/* Number of prefixes, and prefix i in walk order (v4 first) for tests. */
+static inline size_t config_n_prefixes(const struct config *c)
+{
+	return c->n_prefixes;
+}
+
+/* Formats prefix i into buf, sets *rule to its owning rule, returns its group. */
+static inline size_t config_prefix(const struct config *c, size_t i, char *buf, size_t *rule)
+{
+	prefix_fmt(&c->prefixes[i], buf);
+	*rule = c->prefixes[i].rule;
+	return c->prefixes[i].group;
+}
+
 struct config *config_load(const char *path);
 void config_free(struct config *c);
 

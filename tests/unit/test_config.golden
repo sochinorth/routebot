@@ -1,0 +1,1614 @@
+
+== v4 and v6 mixed, unsorted, comments, whitespace, CRLF, no final newline
+W @/a.lst:16: '10.1.2.3/8' has host bits set, using 10.0.0.0/8
+W @/a.lst:17: '2001:db8::1/32' has host bits set, using 2001:db8::/32
+D rule 'r': '@/a.lst' -> 21 prefixes
+I config: 3 groups, 3 devices, 1 rules, 17 prefixes (4 duplicates dropped)
+-> 17 prefixes
+  0.0.0.0/0 gA r0
+  1.0.0.0/16 gA r0
+  1.0.0.0/24 gA r0
+  1.0.0.0/25 gA r0
+  1.1.1.1/32 gA r0
+  1.2.3.4/32 gA r0
+  8.8.8.0/24 gA r0
+  9.9.9.0/24 gA r0
+  10.0.0.0/8 gA r0
+  192.168.1.0/24 gA r0
+  ::/0 gA r0
+  ::1/128 gA r0
+  ::ffff:1.2.3.4/128 gA r0
+  2001:db8::/32 gA r0
+  2001:db8::1/128 gA r0
+  2606:4700::/32 gA r0
+  fe80::/10 gA r0
+
+== one string per file: parse verdicts
+D rule 'r': '@/e000.lst' -> 1 prefixes
+D rule 'r': '@/e001.lst' -> 1 prefixes
+D rule 'r': '@/e002.lst' -> 1 prefixes
+W @/e003.lst:1: invalid CIDR '256.1.1.1', skipped
+D rule 'r': '@/e003.lst' -> 0 prefixes
+W @/e004.lst:1: invalid CIDR '1.256.1.1', skipped
+D rule 'r': '@/e004.lst' -> 0 prefixes
+W @/e005.lst:1: invalid CIDR '1.2.3.256', skipped
+D rule 'r': '@/e005.lst' -> 0 prefixes
+W @/e006.lst:1: invalid CIDR '1234.1.1.1', skipped
+D rule 'r': '@/e006.lst' -> 0 prefixes
+W @/e007.lst:1: invalid CIDR '1.2.3.04', skipped
+D rule 'r': '@/e007.lst' -> 0 prefixes
+W @/e008.lst:1: invalid CIDR '01.2.3.4', skipped
+D rule 'r': '@/e008.lst' -> 0 prefixes
+W @/e009.lst:1: invalid CIDR '00.0.0.0', skipped
+D rule 'r': '@/e009.lst' -> 0 prefixes
+W @/e010.lst:1: invalid CIDR '0.0.0.00', skipped
+D rule 'r': '@/e010.lst' -> 0 prefixes
+D rule 'r': '@/e011.lst' -> 1 prefixes
+W @/e012.lst:1: invalid CIDR '1.2.3', skipped
+D rule 'r': '@/e012.lst' -> 0 prefixes
+W @/e013.lst:1: invalid CIDR '1.2.3.4.5', skipped
+D rule 'r': '@/e013.lst' -> 0 prefixes
+W @/e014.lst:1: invalid CIDR '1..2.3', skipped
+D rule 'r': '@/e014.lst' -> 0 prefixes
+W @/e015.lst:1: invalid CIDR '1.2.3.', skipped
+D rule 'r': '@/e015.lst' -> 0 prefixes
+W @/e016.lst:1: invalid CIDR '.1.2.3', skipped
+D rule 'r': '@/e016.lst' -> 0 prefixes
+W @/e017.lst:1: invalid CIDR '+1.2.3.4', skipped
+D rule 'r': '@/e017.lst' -> 0 prefixes
+W @/e018.lst:1: invalid CIDR '-1.2.3.4', skipped
+D rule 'r': '@/e018.lst' -> 0 prefixes
+W @/e019.lst:1: invalid CIDR '1.2.3.-4', skipped
+D rule 'r': '@/e019.lst' -> 0 prefixes
+W @/e020.lst:1: invalid CIDR '1.2.3.+4', skipped
+D rule 'r': '@/e020.lst' -> 0 prefixes
+W @/e021.lst:1: invalid CIDR '0x1.2.3.4', skipped
+D rule 'r': '@/e021.lst' -> 0 prefixes
+W @/e022.lst:1: invalid CIDR '1.2.3.0x4', skipped
+D rule 'r': '@/e022.lst' -> 0 prefixes
+W @/e023.lst:1: invalid CIDR '1.2.3.4a', skipped
+D rule 'r': '@/e023.lst' -> 0 prefixes
+W @/e024.lst:1: invalid CIDR 'a1.2.3.4', skipped
+D rule 'r': '@/e024.lst' -> 0 prefixes
+W @/e025.lst:1: invalid CIDR '1.2.3.4/33', skipped
+D rule 'r': '@/e025.lst' -> 0 prefixes
+D rule 'r': '@/e026.lst' -> 1 prefixes
+W @/e027.lst:1: '1.2.3.4/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/e027.lst' -> 1 prefixes
+W @/e028.lst:1: invalid CIDR '1.2.3.4/', skipped
+D rule 'r': '@/e028.lst' -> 0 prefixes
+W @/e029.lst:1: invalid CIDR '/24', skipped
+D rule 'r': '@/e029.lst' -> 0 prefixes
+W @/e030.lst:1: invalid CIDR '/', skipped
+D rule 'r': '@/e030.lst' -> 0 prefixes
+W @/e031.lst:1: invalid CIDR '1.2.3.4/24x', skipped
+D rule 'r': '@/e031.lst' -> 0 prefixes
+W @/e032.lst:1: invalid CIDR '1.2.3.4/x24', skipped
+D rule 'r': '@/e032.lst' -> 0 prefixes
+W @/e033.lst:1: invalid CIDR '1.2.3.4/ 24', skipped
+D rule 'r': '@/e033.lst' -> 0 prefixes
+W @/e034.lst:1: invalid CIDR '1.2.3.4/+24', skipped
+D rule 'r': '@/e034.lst' -> 0 prefixes
+W @/e035.lst:1: invalid CIDR '1.2.3.4/-1', skipped
+D rule 'r': '@/e035.lst' -> 0 prefixes
+W @/e036.lst:1: '1.2.3.4/024' has host bits set, using 1.2.3.0/24
+D rule 'r': '@/e036.lst' -> 1 prefixes
+W @/e037.lst:1: '1.2.3.4/0024' has host bits set, using 1.2.3.0/24
+D rule 'r': '@/e037.lst' -> 1 prefixes
+W @/e038.lst:1: invalid CIDR '1.2.3.4/4294967320', skipped
+D rule 'r': '@/e038.lst' -> 0 prefixes
+W @/e039.lst:1: invalid CIDR '1.2.3.4/18446744073709551640', skipped
+D rule 'r': '@/e039.lst' -> 0 prefixes
+W @/e040.lst:1: invalid CIDR '1.2.3.4/24/24', skipped
+D rule 'r': '@/e040.lst' -> 0 prefixes
+W @/e041.lst:1: invalid CIDR '1.2.3.4//24', skipped
+D rule 'r': '@/e041.lst' -> 0 prefixes
+W @/e042.lst:1: invalid CIDR '1.2.3.4/0000000000000000000000000000000000000000024', skipped
+D rule 'r': '@/e042.lst' -> 0 prefixes
+W @/e043.lst:1: invalid CIDR '1.2.3.4/000000000000000000000000000000000000000024', skipped
+D rule 'r': '@/e043.lst' -> 0 prefixes
+W @/e044.lst:1: invalid CIDR '1.2.3.4%eth0', skipped
+D rule 'r': '@/e044.lst' -> 0 prefixes
+W @/e045.lst:1: invalid CIDR '1.2.3.4 junk', skipped
+D rule 'r': '@/e045.lst' -> 0 prefixes
+W @/e046.lst:1: invalid CIDR '1.2.3.4	junk', skipped
+D rule 'r': '@/e046.lst' -> 0 prefixes
+W @/e047.lst:1: invalid CIDR '1 .2.3.4', skipped
+D rule 'r': '@/e047.lst' -> 0 prefixes
+W @/e048.lst:1: invalid CIDR '1.2.3.4 /24', skipped
+D rule 'r': '@/e048.lst' -> 0 prefixes
+W @/e049.lst:1: invalid CIDR '::/129', skipped
+D rule 'r': '@/e049.lst' -> 0 prefixes
+D rule 'r': '@/e050.lst' -> 1 prefixes
+D rule 'r': '@/e051.lst' -> 1 prefixes
+D rule 'r': '@/e052.lst' -> 1 prefixes
+W @/e053.lst:1: invalid CIDR ':', skipped
+D rule 'r': '@/e053.lst' -> 0 prefixes
+W @/e054.lst:1: invalid CIDR ':::', skipped
+D rule 'r': '@/e054.lst' -> 0 prefixes
+W @/e055.lst:1: invalid CIDR '1::2::3', skipped
+D rule 'r': '@/e055.lst' -> 0 prefixes
+W @/e056.lst:1: '::1/64' has host bits set, using ::/64
+D rule 'r': '@/e056.lst' -> 1 prefixes
+D rule 'r': '@/e057.lst' -> 1 prefixes
+W @/e058.lst:1: invalid CIDR '::ffff:1.2.3.04', skipped
+D rule 'r': '@/e058.lst' -> 0 prefixes
+W @/e059.lst:1: invalid CIDR '::ffff:1.2.3.256', skipped
+D rule 'r': '@/e059.lst' -> 0 prefixes
+W @/e060.lst:1: '::1.2.3.4/96' has host bits set, using ::/96
+D rule 'r': '@/e060.lst' -> 1 prefixes
+W @/e061.lst:1: invalid CIDR 'fe80::1%eth0', skipped
+D rule 'r': '@/e061.lst' -> 0 prefixes
+D rule 'r': '@/e062.lst' -> 1 prefixes
+D rule 'r': '@/e063.lst' -> 1 prefixes
+D rule 'r': '@/e064.lst' -> 1 prefixes
+W @/e065.lst:1: invalid CIDR '2001:db8:0:0:0:0:0:0:0/32', skipped
+D rule 'r': '@/e065.lst' -> 0 prefixes
+W @/e066.lst:1: invalid CIDR '12345::/16', skipped
+D rule 'r': '@/e066.lst' -> 0 prefixes
+W @/e067.lst:1: invalid CIDR 'g::/16', skipped
+D rule 'r': '@/e067.lst' -> 0 prefixes
+D rule 'r': '@/e068.lst' -> 1 prefixes
+W @/e069.lst:1: invalid CIDR '2001:db8::/', skipped
+D rule 'r': '@/e069.lst' -> 0 prefixes
+D rule 'r': '@/e070.lst' -> 1 prefixes
+W @/e071.lst:1: invalid CIDR '0000:0000:0000:0000:0000:ffff:255.255.255.255/0128', skipped
+D rule 'r': '@/e071.lst' -> 0 prefixes
+W @/e072.lst:1: invalid CIDR '1.2.3.4\', skipped
+D rule 'r': '@/e072.lst' -> 0 prefixes
+W @/e073.lst:1: invalid CIDR '"1.2.3.4"', skipped
+D rule 'r': '@/e073.lst' -> 0 prefixes
+W @/e074.lst:1: invalid CIDR '1,2,3,4', skipped
+D rule 'r': '@/e074.lst' -> 0 prefixes
+W @/e075.lst:1: invalid CIDR '1.2.3.4;', skipped
+D rule 'r': '@/e075.lst' -> 0 prefixes
+W @/e076.lst:1: '1.2.3.4/24' has host bits set, using 1.2.3.0/24
+D rule 'r': '@/e076.lst' -> 1 prefixes
+W @/e077.lst:1: invalid CIDR '001.002.003.004', skipped
+D rule 'r': '@/e077.lst' -> 0 prefixes
+W @/e078.lst:1: invalid CIDR '1.2.3.4/2.4', skipped
+D rule 'r': '@/e078.lst' -> 0 prefixes
+W @/e079.lst:1: '1.2.3.4/24' has host bits set, using 1.2.3.0/24
+D rule 'r': '@/e079.lst' -> 1 prefixes
+W @/e080.lst:1: invalid CIDR '1.2.3.4/24', skipped
+D rule 'r': '@/e080.lst' -> 0 prefixes
+I config: 3 groups, 3 devices, 1 rules, 12 prefixes (9 duplicates dropped)
+-> 12 prefixes
+  0.0.0.0/0 gA r0
+  0.0.0.0/32 gA r0
+  1.2.3.0/24 gA r0
+  1.2.3.4/32 gA r0
+  255.255.255.255/32 gA r0
+  ::/0 gA r0
+  ::/64 gA r0
+  ::/96 gA r0
+  ::/128 gA r0
+  ::ffff:1.2.3.4/128 gA r0
+  ::ffff:255.255.255.255/128 gA r0
+  2001:db8::/32 gA r0
+
+== random v4-ish strings, one per file
+D rule 'r': '@/f000.lst' -> 1 prefixes
+W @/f001.lst:1: invalid CIDR '255.249.250.250/33', skipped
+D rule 'r': '@/f001.lst' -> 0 prefixes
+W @/f002.lst:1: invalid CIDR '200.300.200.10/1', skipped
+D rule 'r': '@/f002.lst' -> 0 prefixes
+W @/f003.lst:1: '250.0.250.199/8' has host bits set, using 250.0.0.0/8
+D rule 'r': '@/f003.lst' -> 1 prefixes
+W @/f004.lst:1: invalid CIDR '12270671/7x95/', skipped
+D rule 'r': '@/f004.lst' -> 0 prefixes
+D rule 'r': '@/f005.lst' -> 1 prefixes
+W @/f006.lst:1: invalid CIDR '255.299.0.007/0', skipped
+D rule 'r': '@/f006.lst' -> 0 prefixes
+W @/f007.lst:1: '9.10.10.250/24' has host bits set, using 9.10.10.0/24
+D rule 'r': '@/f007.lst' -> 1 prefixes
+W @/f008.lst:1: '0.250.1.255/024' has host bits set, using 0.250.1.0/24
+D rule 'r': '@/f008.lst' -> 1 prefixes
+W @/f009.lst:1: invalid CIDR '1009598274.', skipped
+D rule 'r': '@/f009.lst' -> 0 prefixes
+D rule 'r': '@/f010.lst' -> 1 prefixes
+W @/f011.lst:1: invalid CIDR '1000.250.99.200/8', skipped
+D rule 'r': '@/f011.lst' -> 0 prefixes
+D rule 'r': '@/f012.lst' -> 1 prefixes
+D rule 'r': '@/f013.lst' -> 1 prefixes
+W @/f014.lst:1: invalid CIDR '548966373.9', skipped
+D rule 'r': '@/f014.lst' -> 0 prefixes
+W @/f015.lst:1: invalid CIDR '200.007.199.255/32', skipped
+D rule 'r': '@/f015.lst' -> 0 prefixes
+W @/f016.lst:1: invalid CIDR '100.200.256/24', skipped
+D rule 'r': '@/f016.lst' -> 0 prefixes
+W @/f017.lst:1: invalid CIDR '200.9.10.300/+8', skipped
+D rule 'r': '@/f017.lst' -> 0 prefixes
+D rule 'r': '@/f018.lst' -> 1 prefixes
+W @/f019.lst:1: invalid CIDR '1014/4.3', skipped
+D rule 'r': '@/f019.lst' -> 0 prefixes
+D rule 'r': '@/f020.lst' -> 1 prefixes
+W @/f021.lst:1: invalid CIDR '0.99.01.200', skipped
+D rule 'r': '@/f021.lst' -> 0 prefixes
+W @/f022.lst:1: invalid CIDR '0.200.1.256/32', skipped
+D rule 'r': '@/f022.lst' -> 0 prefixes
+W @/f023.lst:1: invalid CIDR '0.250.200.999//8', skipped
+D rule 'r': '@/f023.lst' -> 0 prefixes
+W @/f024.lst:1: invalid CIDR '593.88', skipped
+D rule 'r': '@/f024.lst' -> 0 prefixes
+W @/f025.lst:1: invalid CIDR '99.10.01', skipped
+D rule 'r': '@/f025.lst' -> 0 prefixes
+W @/f026.lst:1: '200.250.250.255/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f026.lst' -> 1 prefixes
+W @/f027.lst:1: '255.249.199.1/31' has host bits set, using 255.249.199.0/31
+D rule 'r': '@/f027.lst' -> 1 prefixes
+W @/f028.lst:1: invalid CIDR '255.0.255. /31', skipped
+D rule 'r': '@/f028.lst' -> 0 prefixes
+W @/f029.lst:1: invalid CIDR '922879419675144', skipped
+D rule 'r': '@/f029.lst' -> 0 prefixes
+W @/f030.lst:1: invalid CIDR '10.250..300/31', skipped
+D rule 'r': '@/f030.lst' -> 0 prefixes
+W @/f031.lst:1: '99.250.10.100/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f031.lst' -> 1 prefixes
+W @/f032.lst:1: '255.100.200.0/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f032.lst' -> 1 prefixes
+W @/f033.lst:1: invalid CIDR '9..9.10/24', skipped
+D rule 'r': '@/f033.lst' -> 0 prefixes
+W @/f034.lst:1: invalid CIDR '12x3796392531.0', skipped
+D rule 'r': '@/f034.lst' -> 0 prefixes
+W @/f035.lst:1: '250.200.1.99/24' has host bits set, using 250.200.1.0/24
+D rule 'r': '@/f035.lst' -> 1 prefixes
+W @/f036.lst:1: invalid CIDR '10.255.199/24', skipped
+D rule 'r': '@/f036.lst' -> 0 prefixes
+W @/f037.lst:1: '199.200.10.100/8' has host bits set, using 199.0.0.0/8
+D rule 'r': '@/f037.lst' -> 1 prefixes
+W @/f038.lst:1: '199.200.0.199/31' has host bits set, using 199.200.0.198/31
+D rule 'r': '@/f038.lst' -> 1 prefixes
+W @/f039.lst:1: invalid CIDR '8.1545.07', skipped
+D rule 'r': '@/f039.lst' -> 0 prefixes
+W @/f040.lst:1: '100.200.100.99/1' has host bits set, using 0.0.0.0/1
+D rule 'r': '@/f040.lst' -> 1 prefixes
+W @/f041.lst:1: invalid CIDR '256.250..255/32', skipped
+D rule 'r': '@/f041.lst' -> 0 prefixes
+W @/f042.lst:1: invalid CIDR '255.99.99.1/-0', skipped
+D rule 'r': '@/f042.lst' -> 0 prefixes
+W @/f043.lst:1: invalid CIDR '199.0.0.1000/+8', skipped
+D rule 'r': '@/f043.lst' -> 0 prefixes
+W @/f044.lst:1: invalid CIDR '6137.9:028590', skipped
+D rule 'r': '@/f044.lst' -> 0 prefixes
+W @/f045.lst:1: invalid CIDR '249.250.100/8', skipped
+D rule 'r': '@/f045.lst' -> 0 prefixes
+D rule 'r': '@/f046.lst' -> 1 prefixes
+W @/f047.lst:1: '1.200.250.199/24' has host bits set, using 1.200.250.0/24
+D rule 'r': '@/f047.lst' -> 1 prefixes
+W @/f048.lst:1: invalid CIDR '10.199.1. /8', skipped
+D rule 'r': '@/f048.lst' -> 0 prefixes
+W @/f049.lst:1: invalid CIDR '86.838472.532', skipped
+D rule 'r': '@/f049.lst' -> 0 prefixes
+W @/f050.lst:1: invalid CIDR '200.00.249.199/32', skipped
+D rule 'r': '@/f050.lst' -> 0 prefixes
+W @/f051.lst:1: '200.1.250.9/31' has host bits set, using 200.1.250.8/31
+D rule 'r': '@/f051.lst' -> 1 prefixes
+W @/f052.lst:1: '249.9.100.9/024' has host bits set, using 249.9.100.0/24
+D rule 'r': '@/f052.lst' -> 1 prefixes
+W @/f053.lst:1: '199.249.249.200/8' has host bits set, using 199.0.0.0/8
+D rule 'r': '@/f053.lst' -> 1 prefixes
+W @/f054.lst:1: invalid CIDR '461009331', skipped
+D rule 'r': '@/f054.lst' -> 0 prefixes
+W @/f055.lst:1: invalid CIDR '99.255.256.255/32', skipped
+D rule 'r': '@/f055.lst' -> 0 prefixes
+D rule 'r': '@/f056.lst' -> 1 prefixes
+W @/f057.lst:1: invalid CIDR '99.249.256.99.99/24', skipped
+D rule 'r': '@/f057.lst' -> 0 prefixes
+W @/f058.lst:1: '199.200.250.1/31' has host bits set, using 199.200.250.0/31
+D rule 'r': '@/f058.lst' -> 1 prefixes
+W @/f059.lst:1: invalid CIDR '29859', skipped
+D rule 'r': '@/f059.lst' -> 0 prefixes
+W @/f060.lst:1: invalid CIDR '1.1.200.199. /-0', skipped
+D rule 'r': '@/f060.lst' -> 0 prefixes
+W @/f061.lst:1: '255.200.200.9/31' has host bits set, using 255.200.200.8/31
+D rule 'r': '@/f061.lst' -> 1 prefixes
+W @/f062.lst:1: invalid CIDR '99.0.01.10/0', skipped
+D rule 'r': '@/f062.lst' -> 0 prefixes
+W @/f063.lst:1: '250.1.255.10/8' has host bits set, using 250.0.0.0/8
+D rule 'r': '@/f063.lst' -> 1 prefixes
+W @/f064.lst:1: invalid CIDR '24583/..52969.', skipped
+D rule 'r': '@/f064.lst' -> 0 prefixes
+W @/f065.lst:1: invalid CIDR '1.256.200.255/24', skipped
+D rule 'r': '@/f065.lst' -> 0 prefixes
+W @/f066.lst:1: invalid CIDR '9.99.0.999.100', skipped
+D rule 'r': '@/f066.lst' -> 0 prefixes
+W @/f067.lst:1: invalid CIDR '199.256.99.0/-0', skipped
+D rule 'r': '@/f067.lst' -> 0 prefixes
+D rule 'r': '@/f068.lst' -> 1 prefixes
+W @/f069.lst:1: invalid CIDR '02x07....4/3:8231.', skipped
+D rule 'r': '@/f069.lst' -> 0 prefixes
+W @/f070.lst:1: invalid CIDR '0.200.0/31', skipped
+D rule 'r': '@/f070.lst' -> 0 prefixes
+W @/f071.lst:1: invalid CIDR '99..x.249.100/31', skipped
+D rule 'r': '@/f071.lst' -> 0 prefixes
+D rule 'r': '@/f072.lst' -> 1 prefixes
+W @/f073.lst:1: invalid CIDR '250. .200.99/8', skipped
+D rule 'r': '@/f073.lst' -> 0 prefixes
+W @/f074.lst:1: invalid CIDR '88...804.7.6679', skipped
+D rule 'r': '@/f074.lst' -> 0 prefixes
+W @/f075.lst:1: invalid CIDR '249.9.99.01/32', skipped
+D rule 'r': '@/f075.lst' -> 0 prefixes
+W @/f076.lst:1: invalid CIDR '255.200.1.x/0', skipped
+D rule 'r': '@/f076.lst' -> 0 prefixes
+W @/f077.lst:1: invalid CIDR '0.249.199.249/33', skipped
+D rule 'r': '@/f077.lst' -> 0 prefixes
+W @/f078.lst:1: invalid CIDR '0.99.200. /', skipped
+D rule 'r': '@/f078.lst' -> 0 prefixes
+W @/f079.lst:1: invalid CIDR '3856.327.', skipped
+D rule 'r': '@/f079.lst' -> 0 prefixes
+W @/f080.lst:1: invalid CIDR '200.200.249.0/3 2', skipped
+D rule 'r': '@/f080.lst' -> 0 prefixes
+W @/f081.lst:1: invalid CIDR '200.9.0.200/33', skipped
+D rule 'r': '@/f081.lst' -> 0 prefixes
+D rule 'r': '@/f082.lst' -> 1 prefixes
+W @/f083.lst:1: invalid CIDR '300.200.199.249.199/8', skipped
+D rule 'r': '@/f083.lst' -> 0 prefixes
+W @/f084.lst:1: invalid CIDR '.362954', skipped
+D rule 'r': '@/f084.lst' -> 0 prefixes
+W @/f085.lst:1: invalid CIDR '249.9.0.9/-0', skipped
+D rule 'r': '@/f085.lst' -> 0 prefixes
+W @/f086.lst:1: invalid CIDR '199.10.200.007/31', skipped
+D rule 'r': '@/f086.lst' -> 0 prefixes
+W @/f087.lst:1: invalid CIDR '10.0.199/3 2', skipped
+D rule 'r': '@/f087.lst' -> 0 prefixes
+W @/f088.lst:1: invalid CIDR '.99.200.0/0', skipped
+D rule 'r': '@/f088.lst' -> 0 prefixes
+W @/f089.lst:1: invalid CIDR '109:x6615x7', skipped
+D rule 'r': '@/f089.lst' -> 0 prefixes
+W @/f090.lst:1: '0.250.10.99/8' has host bits set, using 0.0.0.0/8
+D rule 'r': '@/f090.lst' -> 1 prefixes
+W @/f091.lst:1: invalid CIDR '.9.1000/1', skipped
+D rule 'r': '@/f091.lst' -> 0 prefixes
+D rule 'r': '@/f092.lst' -> 1 prefixes
+W @/f093.lst:1: invalid CIDR '10.1.10/24', skipped
+D rule 'r': '@/f093.lst' -> 0 prefixes
+W @/f094.lst:1: invalid CIDR '3752.7.053', skipped
+D rule 'r': '@/f094.lst' -> 0 prefixes
+W @/f095.lst:1: invalid CIDR '.99.199.255/24', skipped
+D rule 'r': '@/f095.lst' -> 0 prefixes
+W @/f096.lst:1: invalid CIDR '256.250.1.99/32', skipped
+D rule 'r': '@/f096.lst' -> 0 prefixes
+W @/f097.lst:1: invalid CIDR '199.10.x.01.299/1', skipped
+D rule 'r': '@/f097.lst' -> 0 prefixes
+W @/f098.lst:1: invalid CIDR '100.10.0/0', skipped
+D rule 'r': '@/f098.lst' -> 0 prefixes
+W @/f099.lst:1: invalid CIDR '66432.4433.', skipped
+D rule 'r': '@/f099.lst' -> 0 prefixes
+D rule 'r': '@/f100.lst' -> 1 prefixes
+D rule 'r': '@/f101.lst' -> 1 prefixes
+W @/f102.lst:1: invalid CIDR '199.100.007.200', skipped
+D rule 'r': '@/f102.lst' -> 0 prefixes
+W @/f103.lst:1: invalid CIDR '199.1. .9/0', skipped
+D rule 'r': '@/f103.lst' -> 0 prefixes
+W @/f104.lst:1: invalid CIDR '86646', skipped
+D rule 'r': '@/f104.lst' -> 0 prefixes
+W @/f105.lst:1: invalid CIDR '9. .1.250/1', skipped
+D rule 'r': '@/f105.lst' -> 0 prefixes
+W @/f106.lst:1: '249.99.1.255/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f106.lst' -> 1 prefixes
+W @/f107.lst:1: invalid CIDR '00.9.249.0/31', skipped
+D rule 'r': '@/f107.lst' -> 0 prefixes
+W @/f108.lst:1: invalid CIDR '99.1.249.9.250/24', skipped
+D rule 'r': '@/f108.lst' -> 0 prefixes
+W @/f109.lst:1: invalid CIDR '326593.05x4x990', skipped
+D rule 'r': '@/f109.lst' -> 0 prefixes
+W @/f110.lst:1: '255.9.100.10/1' has host bits set, using 128.0.0.0/1
+D rule 'r': '@/f110.lst' -> 1 prefixes
+W @/f111.lst:1: invalid CIDR '250.250.99.999/0', skipped
+D rule 'r': '@/f111.lst' -> 0 prefixes
+W @/f112.lst:1: invalid CIDR '100.10.01.199/24', skipped
+D rule 'r': '@/f112.lst' -> 0 prefixes
+W @/f113.lst:1: invalid CIDR '199.999.250.0/1', skipped
+D rule 'r': '@/f113.lst' -> 0 prefixes
+D rule 'r': '@/f114.lst' -> 1 prefixes
+W @/f115.lst:1: invalid CIDR '.199.199.249/1', skipped
+D rule 'r': '@/f115.lst' -> 0 prefixes
+D rule 'r': '@/f116.lst' -> 1 prefixes
+W @/f117.lst:1: invalid CIDR '99.9.9.0/x', skipped
+D rule 'r': '@/f117.lst' -> 0 prefixes
+W @/f118.lst:1: invalid CIDR '200.250.10.100.100/33', skipped
+D rule 'r': '@/f118.lst' -> 0 prefixes
+W @/f119.lst:1: invalid CIDR '/96x39643109', skipped
+D rule 'r': '@/f119.lst' -> 0 prefixes
+W @/f120.lst:1: invalid CIDR '0.01.10.1/1', skipped
+D rule 'r': '@/f120.lst' -> 0 prefixes
+D rule 'r': '@/f121.lst' -> 1 prefixes
+W @/f122.lst:1: invalid CIDR '255.10.1000.199/31', skipped
+D rule 'r': '@/f122.lst' -> 0 prefixes
+W @/f123.lst:1: invalid CIDR '255.255.10.007', skipped
+D rule 'r': '@/f123.lst' -> 0 prefixes
+W @/f124.lst:1: invalid CIDR '105823732', skipped
+D rule 'r': '@/f124.lst' -> 0 prefixes
+D rule 'r': '@/f125.lst' -> 1 prefixes
+W @/f126.lst:1: invalid CIDR '1000.249.99. /x', skipped
+D rule 'r': '@/f126.lst' -> 0 prefixes
+W @/f127.lst:1: invalid CIDR '300.199.10.300/8', skipped
+D rule 'r': '@/f127.lst' -> 0 prefixes
+W @/f128.lst:1: invalid CIDR '1000.100.10.99/8', skipped
+D rule 'r': '@/f128.lst' -> 0 prefixes
+W @/f129.lst:1: invalid CIDR '046.1.5', skipped
+D rule 'r': '@/f129.lst' -> 0 prefixes
+W @/f130.lst:1: invalid CIDR '200.299.255.99/+8', skipped
+D rule 'r': '@/f130.lst' -> 0 prefixes
+W @/f131.lst:1: invalid CIDR '1000.200.00.250/1', skipped
+D rule 'r': '@/f131.lst' -> 0 prefixes
+W @/f132.lst:1: invalid CIDR '200.200.007.255.0/-0', skipped
+D rule 'r': '@/f132.lst' -> 0 prefixes
+W @/f133.lst:1: invalid CIDR '199.199.9.199.299/33', skipped
+D rule 'r': '@/f133.lst' -> 0 prefixes
+W @/f134.lst:1: invalid CIDR '14.2174246', skipped
+D rule 'r': '@/f134.lst' -> 0 prefixes
+W @/f135.lst:1: '99.250.1.200/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f135.lst' -> 1 prefixes
+D rule 'r': '@/f136.lst' -> 1 prefixes
+W @/f137.lst:1: invalid CIDR '250.99.255.250/+8', skipped
+D rule 'r': '@/f137.lst' -> 0 prefixes
+W @/f138.lst:1: invalid CIDR '100.1.1.250.200', skipped
+D rule 'r': '@/f138.lst' -> 0 prefixes
+W @/f139.lst:1: invalid CIDR '584608515825', skipped
+D rule 'r': '@/f139.lst' -> 0 prefixes
+W @/f140.lst:1: '1.9.250.199/1' has host bits set, using 0.0.0.0/1
+D rule 'r': '@/f140.lst' -> 1 prefixes
+W @/f141.lst:1: invalid CIDR '0.1.007.0/0', skipped
+D rule 'r': '@/f141.lst' -> 0 prefixes
+D rule 'r': '@/f142.lst' -> 1 prefixes
+W @/f143.lst:1: '255.10.255.199/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f143.lst' -> 1 prefixes
+W @/f144.lst:1: invalid CIDR '.8x6//286.03/1', skipped
+D rule 'r': '@/f144.lst' -> 0 prefixes
+W @/f145.lst:1: '99.199.99.10/1' has host bits set, using 0.0.0.0/1
+D rule 'r': '@/f145.lst' -> 1 prefixes
+W @/f146.lst:1: '250.100.200.99/8' has host bits set, using 250.0.0.0/8
+D rule 'r': '@/f146.lst' -> 1 prefixes
+W @/f147.lst:1: invalid CIDR '0.00.99/24', skipped
+D rule 'r': '@/f147.lst' -> 0 prefixes
+W @/f148.lst:1: '200.1.9.255/1' has host bits set, using 128.0.0.0/1
+D rule 'r': '@/f148.lst' -> 1 prefixes
+W @/f149.lst:1: invalid CIDR '13748', skipped
+D rule 'r': '@/f149.lst' -> 0 prefixes
+W @/f150.lst:1: '199.0.0.249/8' has host bits set, using 199.0.0.0/8
+D rule 'r': '@/f150.lst' -> 1 prefixes
+W @/f151.lst:1: invalid CIDR '199.100.1.1/', skipped
+D rule 'r': '@/f151.lst' -> 0 prefixes
+W @/f152.lst:1: invalid CIDR 'x.01.250.100/1', skipped
+D rule 'r': '@/f152.lst' -> 0 prefixes
+W @/f153.lst:1: invalid CIDR '250.250.1.999/24', skipped
+D rule 'r': '@/f153.lst' -> 0 prefixes
+W @/f154.lst:1: invalid CIDR '83.1x865680704', skipped
+D rule 'r': '@/f154.lst' -> 0 prefixes
+W @/f155.lst:1: invalid CIDR '01.10.0.1/x', skipped
+D rule 'r': '@/f155.lst' -> 0 prefixes
+W @/f156.lst:1: invalid CIDR '249.249.250.199/3 2', skipped
+D rule 'r': '@/f156.lst' -> 0 prefixes
+W @/f157.lst:1: invalid CIDR '10.100.1.1/x', skipped
+D rule 'r': '@/f157.lst' -> 0 prefixes
+W @/f158.lst:1: invalid CIDR '10.200.199', skipped
+D rule 'r': '@/f158.lst' -> 0 prefixes
+W @/f159.lst:1: invalid CIDR '0734719110641394', skipped
+D rule 'r': '@/f159.lst' -> 0 prefixes
+D rule 'r': '@/f160.lst' -> 1 prefixes
+W @/f161.lst:1: invalid CIDR '250.99.250. .9/24', skipped
+D rule 'r': '@/f161.lst' -> 0 prefixes
+W @/f162.lst:1: '200.249.100.255/24' has host bits set, using 200.249.100.0/24
+D rule 'r': '@/f162.lst' -> 1 prefixes
+W @/f163.lst:1: '9.199.199.199/31' has host bits set, using 9.199.199.198/31
+D rule 'r': '@/f163.lst' -> 1 prefixes
+W @/f164.lst:1: invalid CIDR '46.0x3268:', skipped
+D rule 'r': '@/f164.lst' -> 0 prefixes
+W @/f165.lst:1: invalid CIDR '249.1.255/8', skipped
+D rule 'r': '@/f165.lst' -> 0 prefixes
+W @/f166.lst:1: invalid CIDR '1.1000.999.10/-0', skipped
+D rule 'r': '@/f166.lst' -> 0 prefixes
+D rule 'r': '@/f167.lst' -> 1 prefixes
+W @/f168.lst:1: invalid CIDR '100.999.250.999/0', skipped
+D rule 'r': '@/f168.lst' -> 0 prefixes
+W @/f169.lst:1: invalid CIDR '019429', skipped
+D rule 'r': '@/f169.lst' -> 0 prefixes
+W @/f170.lst:1: invalid CIDR '300.250.99.250/', skipped
+D rule 'r': '@/f170.lst' -> 0 prefixes
+W @/f171.lst:1: '100.255.199.1/024' has host bits set, using 100.255.199.0/24
+D rule 'r': '@/f171.lst' -> 1 prefixes
+W @/f172.lst:1: invalid CIDR '00.100.0.199/32', skipped
+D rule 'r': '@/f172.lst' -> 0 prefixes
+W @/f173.lst:1: invalid CIDR '1...250/24', skipped
+D rule 'r': '@/f173.lst' -> 0 prefixes
+W @/f174.lst:1: invalid CIDR '6.9440597712', skipped
+D rule 'r': '@/f174.lst' -> 0 prefixes
+W @/f175.lst:1: invalid CIDR '256.0.199.100/32', skipped
+D rule 'r': '@/f175.lst' -> 0 prefixes
+W @/f176.lst:1: '10.200.100.249/31' has host bits set, using 10.200.100.248/31
+D rule 'r': '@/f176.lst' -> 1 prefixes
+W @/f177.lst:1: invalid CIDR '300.x.9.250/31', skipped
+D rule 'r': '@/f177.lst' -> 0 prefixes
+W @/f178.lst:1: invalid CIDR '256.0.199.255/0', skipped
+D rule 'r': '@/f178.lst' -> 0 prefixes
+W @/f179.lst:1: invalid CIDR '44.3.27', skipped
+D rule 'r': '@/f179.lst' -> 0 prefixes
+W @/f180.lst:1: invalid CIDR '007.0.10.199', skipped
+D rule 'r': '@/f180.lst' -> 0 prefixes
+D rule 'r': '@/f181.lst' -> 1 prefixes
+W @/f182.lst:1: invalid CIDR '100.9.200/0', skipped
+D rule 'r': '@/f182.lst' -> 0 prefixes
+W @/f183.lst:1: invalid CIDR '01.99.99.255/32', skipped
+D rule 'r': '@/f183.lst' -> 0 prefixes
+W @/f184.lst:1: invalid CIDR '03:469341397', skipped
+D rule 'r': '@/f184.lst' -> 0 prefixes
+W @/f185.lst:1: '199.0.250.9/8' has host bits set, using 199.0.0.0/8
+D rule 'r': '@/f185.lst' -> 1 prefixes
+D rule 'r': '@/f186.lst' -> 1 prefixes
+W @/f187.lst:1: '9.9.100.9/1' has host bits set, using 0.0.0.0/1
+D rule 'r': '@/f187.lst' -> 1 prefixes
+W @/f188.lst:1: invalid CIDR '.199.x.9/0', skipped
+D rule 'r': '@/f188.lst' -> 0 prefixes
+W @/f189.lst:1: invalid CIDR '31329084', skipped
+D rule 'r': '@/f189.lst' -> 0 prefixes
+D rule 'r': '@/f190.lst' -> 1 prefixes
+W @/f191.lst:1: invalid CIDR '299.249.99.255/0', skipped
+D rule 'r': '@/f191.lst' -> 0 prefixes
+W @/f192.lst:1: invalid CIDR '99.256.199.100.9/31', skipped
+D rule 'r': '@/f192.lst' -> 0 prefixes
+W @/f193.lst:1: '249.249.99.1/31' has host bits set, using 249.249.99.0/31
+D rule 'r': '@/f193.lst' -> 1 prefixes
+W @/f194.lst:1: invalid CIDR '945701.83771.', skipped
+D rule 'r': '@/f194.lst' -> 0 prefixes
+D rule 'r': '@/f195.lst' -> 1 prefixes
+W @/f196.lst:1: '200.199.99.250/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f196.lst' -> 1 prefixes
+W @/f197.lst:1: invalid CIDR '10.200.99. //8', skipped
+D rule 'r': '@/f197.lst' -> 0 prefixes
+W @/f198.lst:1: invalid CIDR '249.199.249.00', skipped
+D rule 'r': '@/f198.lst' -> 0 prefixes
+W @/f199.lst:1: invalid CIDR '19524.641464579', skipped
+D rule 'r': '@/f199.lst' -> 0 prefixes
+W @/f200.lst:1: invalid CIDR '255..10.256/24', skipped
+D rule 'r': '@/f200.lst' -> 0 prefixes
+W @/f201.lst:1: invalid CIDR '00.100. .10/+8', skipped
+D rule 'r': '@/f201.lst' -> 0 prefixes
+W @/f202.lst:1: invalid CIDR '100.200.100.299/1', skipped
+D rule 'r': '@/f202.lst' -> 0 prefixes
+W @/f203.lst:1: '10.1.9.0/1' has host bits set, using 0.0.0.0/1
+D rule 'r': '@/f203.lst' -> 1 prefixes
+W @/f204.lst:1: invalid CIDR '.3949694.59063', skipped
+D rule 'r': '@/f204.lst' -> 0 prefixes
+D rule 'r': '@/f205.lst' -> 1 prefixes
+W @/f206.lst:1: invalid CIDR '100.99.100. /31', skipped
+D rule 'r': '@/f206.lst' -> 0 prefixes
+W @/f207.lst:1: '9.0.9.250/24' has host bits set, using 9.0.9.0/24
+D rule 'r': '@/f207.lst' -> 1 prefixes
+W @/f208.lst:1: '255.250.100.99/24' has host bits set, using 255.250.100.0/24
+D rule 'r': '@/f208.lst' -> 1 prefixes
+W @/f209.lst:1: invalid CIDR '50886717311.2.81', skipped
+D rule 'r': '@/f209.lst' -> 0 prefixes
+W @/f210.lst:1: invalid CIDR '1.1.1000.', skipped
+D rule 'r': '@/f210.lst' -> 0 prefixes
+W @/f211.lst:1: invalid CIDR '299.199.250.1/24', skipped
+D rule 'r': '@/f211.lst' -> 0 prefixes
+W @/f212.lst:1: invalid CIDR '250.0.99.300/024', skipped
+D rule 'r': '@/f212.lst' -> 0 prefixes
+W @/f213.lst:1: invalid CIDR 'x.99.9.100/31', skipped
+D rule 'r': '@/f213.lst' -> 0 prefixes
+W @/f214.lst:1: invalid CIDR '8258x8.33.5.', skipped
+D rule 'r': '@/f214.lst' -> 0 prefixes
+W @/f215.lst:1: invalid CIDR '9.9.299.250/31', skipped
+D rule 'r': '@/f215.lst' -> 0 prefixes
+D rule 'r': '@/f216.lst' -> 1 prefixes
+D rule 'r': '@/f217.lst' -> 1 prefixes
+W @/f218.lst:1: invalid CIDR '9.199.x.200/1', skipped
+D rule 'r': '@/f218.lst' -> 0 prefixes
+W @/f219.lst:1: invalid CIDR '94336/', skipped
+D rule 'r': '@/f219.lst' -> 0 prefixes
+W @/f220.lst:1: invalid CIDR '.9.255.200/x', skipped
+D rule 'r': '@/f220.lst' -> 0 prefixes
+W @/f221.lst:1: invalid CIDR '256.10.199.200.0/-0', skipped
+D rule 'r': '@/f221.lst' -> 0 prefixes
+D rule 'r': '@/f222.lst' -> 1 prefixes
+W @/f223.lst:1: '255.199.0.99/24' has host bits set, using 255.199.0.0/24
+D rule 'r': '@/f223.lst' -> 1 prefixes
+W @/f224.lst:1: invalid CIDR '91223:', skipped
+D rule 'r': '@/f224.lst' -> 0 prefixes
+D rule 'r': '@/f225.lst' -> 1 prefixes
+W @/f226.lst:1: invalid CIDR '100.256.255.249/0', skipped
+D rule 'r': '@/f226.lst' -> 0 prefixes
+W @/f227.lst:1: invalid CIDR '99.999.250.250/8', skipped
+D rule 'r': '@/f227.lst' -> 0 prefixes
+D rule 'r': '@/f228.lst' -> 1 prefixes
+W @/f229.lst:1: invalid CIDR '00/425.03:37563511', skipped
+D rule 'r': '@/f229.lst' -> 0 prefixes
+W @/f230.lst:1: invalid CIDR '250. .99.007/32', skipped
+D rule 'r': '@/f230.lst' -> 0 prefixes
+D rule 'r': '@/f231.lst' -> 1 prefixes
+D rule 'r': '@/f232.lst' -> 1 prefixes
+W @/f233.lst:1: invalid CIDR '01.249.1.199/24', skipped
+D rule 'r': '@/f233.lst' -> 0 prefixes
+W @/f234.lst:1: invalid CIDR '36:79.7.:34x', skipped
+D rule 'r': '@/f234.lst' -> 0 prefixes
+W @/f235.lst:1: '199.10.200.249/31' has host bits set, using 199.10.200.248/31
+D rule 'r': '@/f235.lst' -> 1 prefixes
+W @/f236.lst:1: invalid CIDR '249.250..199/24', skipped
+D rule 'r': '@/f236.lst' -> 0 prefixes
+W @/f237.lst:1: invalid CIDR '100.1000.199', skipped
+D rule 'r': '@/f237.lst' -> 0 prefixes
+W @/f238.lst:1: invalid CIDR '100.99.999.9/1', skipped
+D rule 'r': '@/f238.lst' -> 0 prefixes
+W @/f239.lst:1: invalid CIDR '46034.7648596', skipped
+D rule 'r': '@/f239.lst' -> 0 prefixes
+W @/f240.lst:1: invalid CIDR '200.00.255.300/1', skipped
+D rule 'r': '@/f240.lst' -> 0 prefixes
+W @/f241.lst:1: invalid CIDR '200. .9.1/-0', skipped
+D rule 'r': '@/f241.lst' -> 0 prefixes
+W @/f242.lst:1: invalid CIDR '199.10.999.9', skipped
+D rule 'r': '@/f242.lst' -> 0 prefixes
+W @/f243.lst:1: invalid CIDR '255..99.0/0', skipped
+D rule 'r': '@/f243.lst' -> 0 prefixes
+W @/f244.lst:1: invalid CIDR ':464.6083843x85', skipped
+D rule 'r': '@/f244.lst' -> 0 prefixes
+W @/f245.lst:1: invalid CIDR '10.10.9.01/24', skipped
+D rule 'r': '@/f245.lst' -> 0 prefixes
+W @/f246.lst:1: '1.10.1.100/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f246.lst' -> 1 prefixes
+W @/f247.lst:1: '200.10.9.9/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f247.lst' -> 1 prefixes
+D rule 'r': '@/f248.lst' -> 1 prefixes
+W @/f249.lst:1: invalid CIDR '63/501/8/2.', skipped
+D rule 'r': '@/f249.lst' -> 0 prefixes
+W @/f250.lst:1: invalid CIDR '249.256.1.00/', skipped
+D rule 'r': '@/f250.lst' -> 0 prefixes
+D rule 'r': '@/f251.lst' -> 1 prefixes
+W @/f252.lst:1: '10.1.249.100/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f252.lst' -> 1 prefixes
+W @/f253.lst:1: invalid CIDR '249.250.99.007/24', skipped
+D rule 'r': '@/f253.lst' -> 0 prefixes
+W @/f254.lst:1: invalid CIDR '72/450:3.1:2', skipped
+D rule 'r': '@/f254.lst' -> 0 prefixes
+W @/f255.lst:1: invalid CIDR '200.1.200.1000/32', skipped
+D rule 'r': '@/f255.lst' -> 0 prefixes
+W @/f256.lst:1: invalid CIDR '256.255.99.007/0', skipped
+D rule 'r': '@/f256.lst' -> 0 prefixes
+W @/f257.lst:1: invalid CIDR '0.249.250.999/8', skipped
+D rule 'r': '@/f257.lst' -> 0 prefixes
+W @/f258.lst:1: invalid CIDR '.200.199.250/0', skipped
+D rule 'r': '@/f258.lst' -> 0 prefixes
+W @/f259.lst:1: invalid CIDR '2619826x.0455640', skipped
+D rule 'r': '@/f259.lst' -> 0 prefixes
+W @/f260.lst:1: '199.200.255.99/31' has host bits set, using 199.200.255.98/31
+D rule 'r': '@/f260.lst' -> 1 prefixes
+W @/f261.lst:1: invalid CIDR '255.1.300.9/x', skipped
+D rule 'r': '@/f261.lst' -> 0 prefixes
+W @/f262.lst:1: invalid CIDR '.199.250.249/1', skipped
+D rule 'r': '@/f262.lst' -> 0 prefixes
+W @/f263.lst:1: invalid CIDR '00.200.200.1/32', skipped
+D rule 'r': '@/f263.lst' -> 0 prefixes
+W @/f264.lst:1: invalid CIDR '69:94.', skipped
+D rule 'r': '@/f264.lst' -> 0 prefixes
+W @/f265.lst:1: invalid CIDR '255.1000.9.100/1', skipped
+D rule 'r': '@/f265.lst' -> 0 prefixes
+W @/f266.lst:1: invalid CIDR '1.199..200/31', skipped
+D rule 'r': '@/f266.lst' -> 0 prefixes
+W @/f267.lst:1: invalid CIDR '250.9.199.', skipped
+D rule 'r': '@/f267.lst' -> 0 prefixes
+D rule 'r': '@/f268.lst' -> 1 prefixes
+W @/f269.lst:1: invalid CIDR '..4326970', skipped
+D rule 'r': '@/f269.lst' -> 0 prefixes
+W @/f270.lst:1: invalid CIDR '249.99.249.200.10/31', skipped
+D rule 'r': '@/f270.lst' -> 0 prefixes
+W @/f271.lst:1: invalid CIDR '.0.1.250/24', skipped
+D rule 'r': '@/f271.lst' -> 0 prefixes
+W @/f272.lst:1: invalid CIDR '249.199.0. /24', skipped
+D rule 'r': '@/f272.lst' -> 0 prefixes
+W @/f273.lst:1: invalid CIDR '99.100.250/1', skipped
+D rule 'r': '@/f273.lst' -> 0 prefixes
+W @/f274.lst:1: invalid CIDR '4951268.', skipped
+D rule 'r': '@/f274.lst' -> 0 prefixes
+W @/f275.lst:1: invalid CIDR '999.0.199/0', skipped
+D rule 'r': '@/f275.lst' -> 0 prefixes
+W @/f276.lst:1: invalid CIDR '9.200.100.0.10/8', skipped
+D rule 'r': '@/f276.lst' -> 0 prefixes
+W @/f277.lst:1: '100.200.10.9/24' has host bits set, using 100.200.10.0/24
+D rule 'r': '@/f277.lst' -> 1 prefixes
+W @/f278.lst:1: invalid CIDR '99.9.1.999', skipped
+D rule 'r': '@/f278.lst' -> 0 prefixes
+W @/f279.lst:1: invalid CIDR '.2/4891x451', skipped
+D rule 'r': '@/f279.lst' -> 0 prefixes
+W @/f280.lst:1: invalid CIDR '99. .200.249/31', skipped
+D rule 'r': '@/f280.lst' -> 0 prefixes
+W @/f281.lst:1: '255.199.9.255/31' has host bits set, using 255.199.9.254/31
+D rule 'r': '@/f281.lst' -> 1 prefixes
+D rule 'r': '@/f282.lst' -> 1 prefixes
+W @/f283.lst:1: '99.255.99.250/8' has host bits set, using 99.0.0.0/8
+D rule 'r': '@/f283.lst' -> 1 prefixes
+W @/f284.lst:1: invalid CIDR '711970x', skipped
+D rule 'r': '@/f284.lst' -> 0 prefixes
+D rule 'r': '@/f285.lst' -> 1 prefixes
+W @/f286.lst:1: invalid CIDR '10.10.1.01/24', skipped
+D rule 'r': '@/f286.lst' -> 0 prefixes
+D rule 'r': '@/f287.lst' -> 1 prefixes
+W @/f288.lst:1: invalid CIDR '256.250.199.99/31', skipped
+D rule 'r': '@/f288.lst' -> 0 prefixes
+W @/f289.lst:1: invalid CIDR '7420./8880', skipped
+D rule 'r': '@/f289.lst' -> 0 prefixes
+W @/f290.lst:1: '9.1.255.10/8' has host bits set, using 9.0.0.0/8
+D rule 'r': '@/f290.lst' -> 1 prefixes
+W @/f291.lst:1: invalid CIDR '200.1.999.99/0', skipped
+D rule 'r': '@/f291.lst' -> 0 prefixes
+W @/f292.lst:1: '10.249.255.250/8' has host bits set, using 10.0.0.0/8
+D rule 'r': '@/f292.lst' -> 1 prefixes
+W @/f293.lst:1: '10.10.255.250/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f293.lst' -> 1 prefixes
+W @/f294.lst:1: invalid CIDR '6645038638.1430', skipped
+D rule 'r': '@/f294.lst' -> 0 prefixes
+W @/f295.lst:1: '200.9.200.99/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f295.lst' -> 1 prefixes
+W @/f296.lst:1: invalid CIDR '0.200.99.01.1/32', skipped
+D rule 'r': '@/f296.lst' -> 0 prefixes
+W @/f297.lst:1: '100.0.1.10/24' has host bits set, using 100.0.1.0/24
+D rule 'r': '@/f297.lst' -> 1 prefixes
+D rule 'r': '@/f298.lst' -> 1 prefixes
+W @/f299.lst:1: invalid CIDR '2737.962x', skipped
+D rule 'r': '@/f299.lst' -> 0 prefixes
+W @/f300.lst:1: '0.250.250.9/1' has host bits set, using 0.0.0.0/1
+D rule 'r': '@/f300.lst' -> 1 prefixes
+W @/f301.lst:1: invalid CIDR '255.99.999.199/0', skipped
+D rule 'r': '@/f301.lst' -> 0 prefixes
+D rule 'r': '@/f302.lst' -> 1 prefixes
+W @/f303.lst:1: invalid CIDR '0.99.0.01/0', skipped
+D rule 'r': '@/f303.lst' -> 0 prefixes
+W @/f304.lst:1: invalid CIDR '3633.8.5.04', skipped
+D rule 'r': '@/f304.lst' -> 0 prefixes
+W @/f305.lst:1: invalid CIDR '199.249.100.00/32', skipped
+D rule 'r': '@/f305.lst' -> 0 prefixes
+W @/f306.lst:1: invalid CIDR '299.200.1.255', skipped
+D rule 'r': '@/f306.lst' -> 0 prefixes
+W @/f307.lst:1: invalid CIDR '9.9.100.9/33', skipped
+D rule 'r': '@/f307.lst' -> 0 prefixes
+W @/f308.lst:1: '255.250.100.200/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f308.lst' -> 1 prefixes
+W @/f309.lst:1: invalid CIDR '244:443002.', skipped
+D rule 'r': '@/f309.lst' -> 0 prefixes
+W @/f310.lst:1: invalid CIDR '249.200.199.300/0', skipped
+D rule 'r': '@/f310.lst' -> 0 prefixes
+W @/f311.lst:1: invalid CIDR '99.0.249/24', skipped
+D rule 'r': '@/f311.lst' -> 0 prefixes
+W @/f312.lst:1: invalid CIDR '300.249.0.1.255/1', skipped
+D rule 'r': '@/f312.lst' -> 0 prefixes
+W @/f313.lst:1: '1.10.10.255/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f313.lst' -> 1 prefixes
+W @/f314.lst:1: invalid CIDR ':595119489.036', skipped
+D rule 'r': '@/f314.lst' -> 0 prefixes
+W @/f315.lst:1: invalid CIDR '10.x.255.199', skipped
+D rule 'r': '@/f315.lst' -> 0 prefixes
+W @/f316.lst:1: invalid CIDR '255.199.1.1/-0', skipped
+D rule 'r': '@/f316.lst' -> 0 prefixes
+W @/f317.lst:1: invalid CIDR '249.0.100/1', skipped
+D rule 'r': '@/f317.lst' -> 0 prefixes
+W @/f318.lst:1: invalid CIDR '200.01.1.10.10/24', skipped
+D rule 'r': '@/f318.lst' -> 0 prefixes
+W @/f319.lst:1: invalid CIDR '6750439', skipped
+D rule 'r': '@/f319.lst' -> 0 prefixes
+W @/f320.lst:1: '9.199.0.9/8' has host bits set, using 9.0.0.0/8
+D rule 'r': '@/f320.lst' -> 1 prefixes
+W @/f321.lst:1: '200.100.99.249/24' has host bits set, using 200.100.99.0/24
+D rule 'r': '@/f321.lst' -> 1 prefixes
+W @/f322.lst:1: '199.99.100.199/31' has host bits set, using 199.99.100.198/31
+D rule 'r': '@/f322.lst' -> 1 prefixes
+W @/f323.lst:1: invalid CIDR '256.250.10.250/31', skipped
+D rule 'r': '@/f323.lst' -> 0 prefixes
+W @/f324.lst:1: invalid CIDR '38:6304', skipped
+D rule 'r': '@/f324.lst' -> 0 prefixes
+W @/f325.lst:1: '9.249.1.10/8' has host bits set, using 9.0.0.0/8
+D rule 'r': '@/f325.lst' -> 1 prefixes
+D rule 'r': '@/f326.lst' -> 1 prefixes
+W @/f327.lst:1: invalid CIDR '199.200.299/0', skipped
+D rule 'r': '@/f327.lst' -> 0 prefixes
+W @/f328.lst:1: invalid CIDR '100.0.256.1/31', skipped
+D rule 'r': '@/f328.lst' -> 0 prefixes
+W @/f329.lst:1: invalid CIDR '966.11937', skipped
+D rule 'r': '@/f329.lst' -> 0 prefixes
+W @/f330.lst:1: '249.100.99.200/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f330.lst' -> 1 prefixes
+W @/f331.lst:1: invalid CIDR '0.9.250.199/33', skipped
+D rule 'r': '@/f331.lst' -> 0 prefixes
+W @/f332.lst:1: invalid CIDR '99.99.256.249/31', skipped
+D rule 'r': '@/f332.lst' -> 0 prefixes
+D rule 'r': '@/f333.lst' -> 1 prefixes
+W @/f334.lst:1: invalid CIDR '/732.3629143', skipped
+D rule 'r': '@/f334.lst' -> 0 prefixes
+W @/f335.lst:1: invalid CIDR '9.1000.99.0/32', skipped
+D rule 'r': '@/f335.lst' -> 0 prefixes
+W @/f336.lst:1: '10.199.10.10/8' has host bits set, using 10.0.0.0/8
+D rule 'r': '@/f336.lst' -> 1 prefixes
+W @/f337.lst:1: invalid CIDR '100.249.299.10/32', skipped
+D rule 'r': '@/f337.lst' -> 0 prefixes
+D rule 'r': '@/f338.lst' -> 1 prefixes
+W @/f339.lst:1: invalid CIDR '7772795/39', skipped
+D rule 'r': '@/f339.lst' -> 0 prefixes
+D rule 'r': '@/f340.lst' -> 1 prefixes
+W @/f341.lst:1: invalid CIDR '99.100.199.0.199/31', skipped
+D rule 'r': '@/f341.lst' -> 0 prefixes
+W @/f342.lst:1: invalid CIDR '255.100.999/31', skipped
+D rule 'r': '@/f342.lst' -> 0 prefixes
+W @/f343.lst:1: invalid CIDR '200.255.00.199/32', skipped
+D rule 'r': '@/f343.lst' -> 0 prefixes
+W @/f344.lst:1: invalid CIDR '053423843.3', skipped
+D rule 'r': '@/f344.lst' -> 0 prefixes
+W @/f345.lst:1: invalid CIDR '0. .255.1/8', skipped
+D rule 'r': '@/f345.lst' -> 0 prefixes
+W @/f346.lst:1: invalid CIDR '10. .250.199//8', skipped
+D rule 'r': '@/f346.lst' -> 0 prefixes
+W @/f347.lst:1: invalid CIDR '9.0.299.200', skipped
+D rule 'r': '@/f347.lst' -> 0 prefixes
+W @/f348.lst:1: invalid CIDR '1.1.100.250.249/1', skipped
+D rule 'r': '@/f348.lst' -> 0 prefixes
+W @/f349.lst:1: invalid CIDR '2/.316:9', skipped
+D rule 'r': '@/f349.lst' -> 0 prefixes
+W @/f350.lst:1: invalid CIDR '9. .200.9', skipped
+D rule 'r': '@/f350.lst' -> 0 prefixes
+W @/f351.lst:1: invalid CIDR '300.9.1.249/32', skipped
+D rule 'r': '@/f351.lst' -> 0 prefixes
+W @/f352.lst:1: invalid CIDR '9.99.255.200/-0', skipped
+D rule 'r': '@/f352.lst' -> 0 prefixes
+W @/f353.lst:1: '250.249.1.100/8' has host bits set, using 250.0.0.0/8
+D rule 'r': '@/f353.lst' -> 1 prefixes
+W @/f354.lst:1: invalid CIDR '06:91//3', skipped
+D rule 'r': '@/f354.lst' -> 0 prefixes
+W @/f355.lst:1: '1.255.249.10/024' has host bits set, using 1.255.249.0/24
+D rule 'r': '@/f355.lst' -> 1 prefixes
+W @/f356.lst:1: '9.200.10.255/1' has host bits set, using 0.0.0.0/1
+D rule 'r': '@/f356.lst' -> 1 prefixes
+W @/f357.lst:1: invalid CIDR '250.10.0.1/+8', skipped
+D rule 'r': '@/f357.lst' -> 0 prefixes
+W @/f358.lst:1: '255.99.100.255/1' has host bits set, using 128.0.0.0/1
+D rule 'r': '@/f358.lst' -> 1 prefixes
+W @/f359.lst:1: invalid CIDR '/2929..31251', skipped
+D rule 'r': '@/f359.lst' -> 0 prefixes
+W @/f360.lst:1: invalid CIDR '0.1.10.007/32', skipped
+D rule 'r': '@/f360.lst' -> 0 prefixes
+W @/f361.lst:1: invalid CIDR '299.255.99.1/24', skipped
+D rule 'r': '@/f361.lst' -> 0 prefixes
+W @/f362.lst:1: invalid CIDR '.10.255.255/24', skipped
+D rule 'r': '@/f362.lst' -> 0 prefixes
+W @/f363.lst:1: invalid CIDR '99.01.100.250/31', skipped
+D rule 'r': '@/f363.lst' -> 0 prefixes
+W @/f364.lst:1: invalid CIDR '90374.75', skipped
+D rule 'r': '@/f364.lst' -> 0 prefixes
+W @/f365.lst:1: '0.255.199.0/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f365.lst' -> 1 prefixes
+D rule 'r': '@/f366.lst' -> 1 prefixes
+W @/f367.lst:1: '250.250.1.255/024' has host bits set, using 250.250.1.0/24
+D rule 'r': '@/f367.lst' -> 1 prefixes
+W @/f368.lst:1: '0.199.199.0/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f368.lst' -> 1 prefixes
+W @/f369.lst:1: invalid CIDR '381.245:2347:964', skipped
+D rule 'r': '@/f369.lst' -> 0 prefixes
+W @/f370.lst:1: invalid CIDR '9.256.0.200/32', skipped
+D rule 'r': '@/f370.lst' -> 0 prefixes
+W @/f371.lst:1: '0.200.100.255/24' has host bits set, using 0.200.100.0/24
+D rule 'r': '@/f371.lst' -> 1 prefixes
+W @/f372.lst:1: invalid CIDR '00.255.256.100/0', skipped
+D rule 'r': '@/f372.lst' -> 0 prefixes
+D rule 'r': '@/f373.lst' -> 1 prefixes
+W @/f374.lst:1: invalid CIDR '774123x4543:', skipped
+D rule 'r': '@/f374.lst' -> 0 prefixes
+W @/f375.lst:1: invalid CIDR '200.007.10.256.9/0', skipped
+D rule 'r': '@/f375.lst' -> 0 prefixes
+W @/f376.lst:1: '0.255.250.255/024' has host bits set, using 0.255.250.0/24
+D rule 'r': '@/f376.lst' -> 1 prefixes
+W @/f377.lst:1: invalid CIDR '9.1.999.1000/31', skipped
+D rule 'r': '@/f377.lst' -> 0 prefixes
+W @/f378.lst:1: invalid CIDR '199.99.100.100/-0', skipped
+D rule 'r': '@/f378.lst' -> 0 prefixes
+W @/f379.lst:1: invalid CIDR '02.7.2806.', skipped
+D rule 'r': '@/f379.lst' -> 0 prefixes
+W @/f380.lst:1: invalid CIDR '0.99.999.1/x', skipped
+D rule 'r': '@/f380.lst' -> 0 prefixes
+W @/f381.lst:1: invalid CIDR '199.256.200.250/0', skipped
+D rule 'r': '@/f381.lst' -> 0 prefixes
+W @/f382.lst:1: invalid CIDR '10.99.1.200.1/-0', skipped
+D rule 'r': '@/f382.lst' -> 0 prefixes
+W @/f383.lst:1: '255.100.10.100/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f383.lst' -> 1 prefixes
+W @/f384.lst:1: invalid CIDR '.73.3880875/.337', skipped
+D rule 'r': '@/f384.lst' -> 0 prefixes
+W @/f385.lst:1: invalid CIDR '255.10.200.199/x', skipped
+D rule 'r': '@/f385.lst' -> 0 prefixes
+W @/f386.lst:1: invalid CIDR '100.10.10.249.100/8', skipped
+D rule 'r': '@/f386.lst' -> 0 prefixes
+W @/f387.lst:1: '249.9.1.9/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f387.lst' -> 1 prefixes
+W @/f388.lst:1: invalid CIDR '1000.0.256./24', skipped
+D rule 'r': '@/f388.lst' -> 0 prefixes
+W @/f389.lst:1: invalid CIDR '77511045872', skipped
+D rule 'r': '@/f389.lst' -> 0 prefixes
+W @/f390.lst:1: invalid CIDR '99.10.1000.249/1', skipped
+D rule 'r': '@/f390.lst' -> 0 prefixes
+D rule 'r': '@/f391.lst' -> 1 prefixes
+W @/f392.lst:1: '99.99.9.9/8' has host bits set, using 99.0.0.0/8
+D rule 'r': '@/f392.lst' -> 1 prefixes
+W @/f393.lst:1: '10.99.1.100/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f393.lst' -> 1 prefixes
+W @/f394.lst:1: invalid CIDR '321x1.38', skipped
+D rule 'r': '@/f394.lst' -> 0 prefixes
+W @/f395.lst:1: invalid CIDR '99.200.1.100.250/1', skipped
+D rule 'r': '@/f395.lst' -> 0 prefixes
+D rule 'r': '@/f396.lst' -> 1 prefixes
+W @/f397.lst:1: invalid CIDR '.249.1000.1/32', skipped
+D rule 'r': '@/f397.lst' -> 0 prefixes
+W @/f398.lst:1: invalid CIDR '99.1.0.250//8', skipped
+D rule 'r': '@/f398.lst' -> 0 prefixes
+W @/f399.lst:1: invalid CIDR '15792303.80.:.48x', skipped
+D rule 'r': '@/f399.lst' -> 0 prefixes
+W @/f400.lst:1: invalid CIDR '200.10.9./8', skipped
+D rule 'r': '@/f400.lst' -> 0 prefixes
+W @/f401.lst:1: '99.250.249.0/1' has host bits set, using 0.0.0.0/1
+D rule 'r': '@/f401.lst' -> 1 prefixes
+W @/f402.lst:1: '249.200.9.255/31' has host bits set, using 249.200.9.254/31
+D rule 'r': '@/f402.lst' -> 1 prefixes
+W @/f403.lst:1: '250.10.250.10/24' has host bits set, using 250.10.250.0/24
+D rule 'r': '@/f403.lst' -> 1 prefixes
+W @/f404.lst:1: invalid CIDR '6575575804', skipped
+D rule 'r': '@/f404.lst' -> 0 prefixes
+W @/f405.lst:1: '249.249.99.10/1' has host bits set, using 128.0.0.0/1
+D rule 'r': '@/f405.lst' -> 1 prefixes
+W @/f406.lst:1: invalid CIDR '199.249..99/8', skipped
+D rule 'r': '@/f406.lst' -> 0 prefixes
+W @/f407.lst:1: '200.199.0.255/8' has host bits set, using 200.0.0.0/8
+D rule 'r': '@/f407.lst' -> 1 prefixes
+D rule 'r': '@/f408.lst' -> 1 prefixes
+W @/f409.lst:1: invalid CIDR '48728829.29176.', skipped
+D rule 'r': '@/f409.lst' -> 0 prefixes
+D rule 'r': '@/f410.lst' -> 1 prefixes
+W @/f411.lst:1: '250.99.250.255/31' has host bits set, using 250.99.250.254/31
+D rule 'r': '@/f411.lst' -> 1 prefixes
+W @/f412.lst:1: invalid CIDR '249.200.200.10.199/24', skipped
+D rule 'r': '@/f412.lst' -> 0 prefixes
+W @/f413.lst:1: invalid CIDR '10.007.1/-0', skipped
+D rule 'r': '@/f413.lst' -> 0 prefixes
+W @/f414.lst:1: invalid CIDR '..0130312', skipped
+D rule 'r': '@/f414.lst' -> 0 prefixes
+W @/f415.lst:1: invalid CIDR '1.250.10.1.200/+8', skipped
+D rule 'r': '@/f415.lst' -> 0 prefixes
+W @/f416.lst:1: invalid CIDR '0.999.100.200/8', skipped
+D rule 'r': '@/f416.lst' -> 0 prefixes
+W @/f417.lst:1: invalid CIDR '100.1.00/31', skipped
+D rule 'r': '@/f417.lst' -> 0 prefixes
+W @/f418.lst:1: invalid CIDR '250.1.1000.199/3 2', skipped
+D rule 'r': '@/f418.lst' -> 0 prefixes
+W @/f419.lst:1: invalid CIDR '94807033.7012', skipped
+D rule 'r': '@/f419.lst' -> 0 prefixes
+W @/f420.lst:1: invalid CIDR '1000.99.x.200', skipped
+D rule 'r': '@/f420.lst' -> 0 prefixes
+W @/f421.lst:1: '10.255.200.250/1' has host bits set, using 0.0.0.0/1
+D rule 'r': '@/f421.lst' -> 1 prefixes
+W @/f422.lst:1: '249.99.249.1/1' has host bits set, using 128.0.0.0/1
+D rule 'r': '@/f422.lst' -> 1 prefixes
+W @/f423.lst:1: invalid CIDR '200.99.99.9.255/3 2', skipped
+D rule 'r': '@/f423.lst' -> 0 prefixes
+W @/f424.lst:1: invalid CIDR '35133', skipped
+D rule 'r': '@/f424.lst' -> 0 prefixes
+W @/f425.lst:1: '200.100.250.99/31' has host bits set, using 200.100.250.98/31
+D rule 'r': '@/f425.lst' -> 1 prefixes
+W @/f426.lst:1: '255.199.100.100/1' has host bits set, using 128.0.0.0/1
+D rule 'r': '@/f426.lst' -> 1 prefixes
+W @/f427.lst:1: invalid CIDR '1.250.1000.0/-0', skipped
+D rule 'r': '@/f427.lst' -> 0 prefixes
+W @/f428.lst:1: '200.9.199.9/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f428.lst' -> 1 prefixes
+W @/f429.lst:1: invalid CIDR '934.73', skipped
+D rule 'r': '@/f429.lst' -> 0 prefixes
+W @/f430.lst:1: '199.1.200.1/8' has host bits set, using 199.0.0.0/8
+D rule 'r': '@/f430.lst' -> 1 prefixes
+W @/f431.lst:1: invalid CIDR '10.00.9.10/31', skipped
+D rule 'r': '@/f431.lst' -> 0 prefixes
+W @/f432.lst:1: invalid CIDR '255.10.300.1/0', skipped
+D rule 'r': '@/f432.lst' -> 0 prefixes
+D rule 'r': '@/f433.lst' -> 1 prefixes
+W @/f434.lst:1: invalid CIDR '54952.74696065445', skipped
+D rule 'r': '@/f434.lst' -> 0 prefixes
+W @/f435.lst:1: invalid CIDR '249.0.299.249/0', skipped
+D rule 'r': '@/f435.lst' -> 0 prefixes
+W @/f436.lst:1: invalid CIDR '199.249.10/8', skipped
+D rule 'r': '@/f436.lst' -> 0 prefixes
+W @/f437.lst:1: invalid CIDR '99.255.300.9/32', skipped
+D rule 'r': '@/f437.lst' -> 0 prefixes
+D rule 'r': '@/f438.lst' -> 1 prefixes
+W @/f439.lst:1: invalid CIDR '698555801', skipped
+D rule 'r': '@/f439.lst' -> 0 prefixes
+W @/f440.lst:1: '9.255.0.100/8' has host bits set, using 9.0.0.0/8
+D rule 'r': '@/f440.lst' -> 1 prefixes
+W @/f441.lst:1: invalid CIDR '199.255.x.249/8', skipped
+D rule 'r': '@/f441.lst' -> 0 prefixes
+W @/f442.lst:1: invalid CIDR '299.199.255.0//8', skipped
+D rule 'r': '@/f442.lst' -> 0 prefixes
+D rule 'r': '@/f443.lst' -> 1 prefixes
+W @/f444.lst:1: invalid CIDR '992.57...35', skipped
+D rule 'r': '@/f444.lst' -> 0 prefixes
+W @/f445.lst:1: invalid CIDR '0.249.200.1/-0', skipped
+D rule 'r': '@/f445.lst' -> 0 prefixes
+W @/f446.lst:1: '200.200.10.9/024' has host bits set, using 200.200.10.0/24
+D rule 'r': '@/f446.lst' -> 1 prefixes
+W @/f447.lst:1: invalid CIDR '256.1.250. .100/31', skipped
+D rule 'r': '@/f447.lst' -> 0 prefixes
+W @/f448.lst:1: invalid CIDR '199.10.249.99.250/8', skipped
+D rule 'r': '@/f448.lst' -> 0 prefixes
+W @/f449.lst:1: invalid CIDR '7407.5654714.130', skipped
+D rule 'r': '@/f449.lst' -> 0 prefixes
+W @/f450.lst:1: '255.0.255.100/24' has host bits set, using 255.0.255.0/24
+D rule 'r': '@/f450.lst' -> 1 prefixes
+D rule 'r': '@/f451.lst' -> 1 prefixes
+W @/f452.lst:1: invalid CIDR '249.10.1.100. /24', skipped
+D rule 'r': '@/f452.lst' -> 0 prefixes
+W @/f453.lst:1: invalid CIDR '255.99.99.250/-0', skipped
+D rule 'r': '@/f453.lst' -> 0 prefixes
+W @/f454.lst:1: invalid CIDR '093.61:958x', skipped
+D rule 'r': '@/f454.lst' -> 0 prefixes
+W @/f455.lst:1: invalid CIDR '9.00.200.10/8', skipped
+D rule 'r': '@/f455.lst' -> 0 prefixes
+W @/f456.lst:1: invalid CIDR '249.249.9.00/8', skipped
+D rule 'r': '@/f456.lst' -> 0 prefixes
+W @/f457.lst:1: invalid CIDR '256.0.250.9.199/0', skipped
+D rule 'r': '@/f457.lst' -> 0 prefixes
+W @/f458.lst:1: invalid CIDR '199.x.1.1/1', skipped
+D rule 'r': '@/f458.lst' -> 0 prefixes
+W @/f459.lst:1: invalid CIDR '53/8300/.45065', skipped
+D rule 'r': '@/f459.lst' -> 0 prefixes
+W @/f460.lst:1: invalid CIDR '200.9.9.200.9/32', skipped
+D rule 'r': '@/f460.lst' -> 0 prefixes
+D rule 'r': '@/f461.lst' -> 1 prefixes
+W @/f462.lst:1: invalid CIDR '199.9.999.9/24', skipped
+D rule 'r': '@/f462.lst' -> 0 prefixes
+W @/f463.lst:1: invalid CIDR '99.250.99. /1', skipped
+D rule 'r': '@/f463.lst' -> 0 prefixes
+W @/f464.lst:1: invalid CIDR '60x2:5', skipped
+D rule 'r': '@/f464.lst' -> 0 prefixes
+D rule 'r': '@/f465.lst' -> 1 prefixes
+W @/f466.lst:1: '0.100.1.249/24' has host bits set, using 0.100.1.0/24
+D rule 'r': '@/f466.lst' -> 1 prefixes
+W @/f467.lst:1: invalid CIDR '250.249.0.01/32', skipped
+D rule 'r': '@/f467.lst' -> 0 prefixes
+D rule 'r': '@/f468.lst' -> 1 prefixes
+W @/f469.lst:1: invalid CIDR '51.47...', skipped
+D rule 'r': '@/f469.lst' -> 0 prefixes
+W @/f470.lst:1: invalid CIDR '.256.200.99/31', skipped
+D rule 'r': '@/f470.lst' -> 0 prefixes
+W @/f471.lst:1: invalid CIDR '249.299.200.255/8', skipped
+D rule 'r': '@/f471.lst' -> 0 prefixes
+D rule 'r': '@/f472.lst' -> 1 prefixes
+W @/f473.lst:1: invalid CIDR '0.999.199.249/24', skipped
+D rule 'r': '@/f473.lst' -> 0 prefixes
+W @/f474.lst:1: invalid CIDR '832..285x979', skipped
+D rule 'r': '@/f474.lst' -> 0 prefixes
+W @/f475.lst:1: invalid CIDR '299.0.199.199/8', skipped
+D rule 'r': '@/f475.lst' -> 0 prefixes
+D rule 'r': '@/f476.lst' -> 1 prefixes
+W @/f477.lst:1: '99.249.9.100/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f477.lst' -> 1 prefixes
+W @/f478.lst:1: invalid CIDR '100.1000.250', skipped
+D rule 'r': '@/f478.lst' -> 0 prefixes
+W @/f479.lst:1: invalid CIDR '7.2.4311.1', skipped
+D rule 'r': '@/f479.lst' -> 0 prefixes
+W @/f480.lst:1: '250.250.99.250/8' has host bits set, using 250.0.0.0/8
+D rule 'r': '@/f480.lst' -> 1 prefixes
+W @/f481.lst:1: invalid CIDR '10.1.01.199/32', skipped
+D rule 'r': '@/f481.lst' -> 0 prefixes
+W @/f482.lst:1: invalid CIDR '249.1.300/1', skipped
+D rule 'r': '@/f482.lst' -> 0 prefixes
+W @/f483.lst:1: invalid CIDR '199.256.99.255//8', skipped
+D rule 'r': '@/f483.lst' -> 0 prefixes
+W @/f484.lst:1: invalid CIDR '12.4.5x79277633131', skipped
+D rule 'r': '@/f484.lst' -> 0 prefixes
+W @/f485.lst:1: '10.199.255.250/024' has host bits set, using 10.199.255.0/24
+D rule 'r': '@/f485.lst' -> 1 prefixes
+D rule 'r': '@/f486.lst' -> 1 prefixes
+W @/f487.lst:1: '9.200.100.99/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f487.lst' -> 1 prefixes
+W @/f488.lst:1: invalid CIDR '9.0.00.200/0', skipped
+D rule 'r': '@/f488.lst' -> 0 prefixes
+W @/f489.lst:1: invalid CIDR '1/0:.x05172450..', skipped
+D rule 'r': '@/f489.lst' -> 0 prefixes
+W @/f490.lst:1: '200.99.199.199/0' has host bits set, using 0.0.0.0/0
+D rule 'r': '@/f490.lst' -> 1 prefixes
+W @/f491.lst:1: '9.250.249.255/31' has host bits set, using 9.250.249.254/31
+D rule 'r': '@/f491.lst' -> 1 prefixes
+D rule 'r': '@/f492.lst' -> 1 prefixes
+D rule 'r': '@/f493.lst' -> 1 prefixes
+W @/f494.lst:1: invalid CIDR '96.x208.6861', skipped
+D rule 'r': '@/f494.lst' -> 0 prefixes
+W @/f495.lst:1: invalid CIDR '99.9.1.10.99/+8', skipped
+D rule 'r': '@/f495.lst' -> 0 prefixes
+D rule 'r': '@/f496.lst' -> 1 prefixes
+W @/f497.lst:1: invalid CIDR '10.199.10.1.1/1', skipped
+D rule 'r': '@/f497.lst' -> 0 prefixes
+W @/f498.lst:1: '1.199.99.1/24' has host bits set, using 1.199.99.0/24
+D rule 'r': '@/f498.lst' -> 1 prefixes
+W @/f499.lst:1: invalid CIDR '.0:8898684.7', skipped
+D rule 'r': '@/f499.lst' -> 0 prefixes
+I config: 3 groups, 3 devices, 1 rules, 114 prefixes (50 duplicates dropped)
+-> 114 prefixes
+  0.0.0.0/0 gA r0
+  0.0.0.0/1 gA r0
+  0.0.0.0/8 gA r0
+  0.99.9.255/32 gA r0
+  0.100.1.0/24 gA r0
+  0.100.250.199/32 gA r0
+  0.199.99.100/31 gA r0
+  0.200.100.0/24 gA r0
+  0.249.199.250/32 gA r0
+  0.250.1.0/24 gA r0
+  0.255.250.0/24 gA r0
+  1.9.99.0/24 gA r0
+  1.100.199.0/32 gA r0
+  1.199.99.0/24 gA r0
+  1.199.199.1/32 gA r0
+  1.200.1.199/32 gA r0
+  1.200.199.9/32 gA r0
+  1.200.250.0/24 gA r0
+  1.255.249.0/24 gA r0
+  1.255.250.199/32 gA r0
+  9.0.0.0/8 gA r0
+  9.0.9.0/24 gA r0
+  9.0.100.200/32 gA r0
+  9.9.250.99/32 gA r0
+  9.10.1.200/32 gA r0
+  9.10.10.0/24 gA r0
+  9.99.1.200/32 gA r0
+  9.199.199.198/31 gA r0
+  9.199.255.100/32 gA r0
+  9.249.200.0/32 gA r0
+  9.249.250.1/32 gA r0
+  9.250.249.250/32 gA r0
+  9.250.249.254/31 gA r0
+  10.0.0.0/8 gA r0
+  10.9.0.99/32 gA r0
+  10.10.0.0/32 gA r0
+  10.10.1.200/32 gA r0
+  10.99.0.10/32 gA r0
+  10.199.99.0/24 gA r0
+  10.199.255.0/24 gA r0
+  10.200.10.100/32 gA r0
+  10.200.100.248/31 gA r0
+  10.249.200.250/32 gA r0
+  99.0.0.0/8 gA r0
+  99.0.1.10/32 gA r0
+  99.0.200.99/32 gA r0
+  99.9.9.10/31 gA r0
+  99.10.249.200/32 gA r0
+  99.100.255.99/32 gA r0
+  99.250.0.200/32 gA r0
+  100.0.1.0/24 gA r0
+  100.10.0.99/32 gA r0
+  100.99.99.99/32 gA r0
+  100.99.199.200/32 gA r0
+  100.100.0.200/32 gA r0
+  100.199.199.0/32 gA r0
+  100.200.10.0/24 gA r0
+  100.200.250.10/32 gA r0
+  100.249.1.249/32 gA r0
+  100.249.250.9/32 gA r0
+  100.250.199.200/32 gA r0
+  100.255.199.0/24 gA r0
+  128.0.0.0/1 gA r0
+  199.0.0.0/8 gA r0
+  199.1.0.250/31 gA r0
+  199.1.1.9/32 gA r0
+  199.10.200.248/31 gA r0
+  199.99.9.250/31 gA r0
+  199.99.99.99/32 gA r0
+  199.99.100.198/31 gA r0
+  199.200.0.198/31 gA r0
+  199.200.250.0/31 gA r0
+  199.200.255.98/31 gA r0
+  199.250.250.10/31 gA r0
+  199.255.250.9/32 gA r0
+  200.0.0.0/8 gA r0
+  200.0.10.100/32 gA r0
+  200.0.200.199/32 gA r0
+  200.1.250.8/31 gA r0
+  200.100.0.200/32 gA r0
+  200.100.99.0/24 gA r0
+  200.100.250.0/24 gA r0
+  200.100.250.98/31 gA r0
+  200.199.9.100/31 gA r0
+  200.199.199.249/32 gA r0
+  200.200.10.0/24 gA r0
+  200.249.100.0/24 gA r0
+  249.0.200.99/32 gA r0
+  249.0.200.249/32 gA r0
+  249.9.100.0/24 gA r0
+  249.10.200.100/31 gA r0
+  249.99.249.1/32 gA r0
+  249.100.250.0/32 gA r0
+  249.199.199.9/32 gA r0
+  249.200.9.254/31 gA r0
+  249.200.200.99/32 gA r0
+  249.249.99.0/31 gA r0
+  250.0.0.0/8 gA r0
+  250.10.99.250/32 gA r0
+  250.10.250.0/24 gA r0
+  250.99.250.254/31 gA r0
+  250.200.1.0/24 gA r0
+  250.250.1.0/24 gA r0
+  250.255.0.199/32 gA r0
+  255.0.255.0/24 gA r0
+  255.1.0.250/32 gA r0
+  255.10.9.255/32 gA r0
+  255.199.0.0/24 gA r0
+  255.199.9.254/31 gA r0
+  255.200.200.8/31 gA r0
+  255.249.0.99/32 gA r0
+  255.249.199.0/31 gA r0
+  255.250.100.0/24 gA r0
+  ::8622/128 gA r0
+
+== more than 10 problems in one cidrset, shared by a glob
+W @/p/1.lst:1: invalid CIDR 'bad1', skipped
+W @/p/1.lst:2: invalid CIDR 'bad2', skipped
+W @/p/1.lst:3: '1.2.3.4/8' has host bits set, using 1.0.0.0/8
+W @/p/1.lst:4: invalid CIDR 'bad3', skipped
+W @/p/1.lst:6: invalid CIDR 'bad4', skipped
+W @/p/1.lst:7: invalid CIDR 'bad5', skipped
+W @/p/1.lst:8: invalid CIDR 'bad6', skipped
+W @/p/2.lst:1: invalid CIDR 'bad7', skipped
+W @/p/2.lst:2: '2.2.2.2/8' has host bits set, using 2.0.0.0/8
+W @/p/2.lst:3: invalid CIDR 'bad8', skipped
+W rule 'r': 5 more problems in '@/p/*.lst'
+D rule 'r': '@/p/*.lst' -> 5 prefixes
+W @/q.lst:1: invalid CIDR 'bad13', skipped
+W @/q.lst:2: '5.5.5.5/24' has host bits set, using 5.5.5.0/24
+D rule 'r': '@/q.lst' -> 1 prefixes
+I config: 3 groups, 3 devices, 1 rules, 6 prefixes (0 duplicates dropped)
+-> 6 prefixes
+  1.0.0.0/8 gA r0
+  1.1.1.1/32 gA r0
+  2.0.0.0/8 gA r0
+  3.0.0.0/8 gA r0
+  4.4.4.0/24 gA r0
+  5.5.5.0/24 gA r0
+
+== first rule wins, whatever the file and glob order
+D rule 'r0': '@/z/*' -> 7 prefixes
+D rule 'r1': '@/a/*' -> 5 prefixes
+D rule 'r2': '@/m.lst' -> 4 prefixes
+D rule 'r3': '@/z/2.lst' -> 3 prefixes
+W 1.0.0.0/8: claimed by rule 'r1' (gA) and rule 'r2' (gB), first one wins
+W 10.0.0.0/8: claimed by rule 'r0' (gB) and rule 'r1' (gA), first one wins
+W 10.0.0.0/8: claimed by rule 'r0' (gB) and rule 'r3' (gC), first one wins
+W 40.0.0.0/8: claimed by rule 'r0' (gB) and rule 'r3' (gC), first one wins
+W 50.0.0.0/8: claimed by rule 'r0' (gB) and rule 'r1' (gA), first one wins
+W 50.0.0.0/8: claimed by rule 'r0' (gB) and rule 'r3' (gC), first one wins
+W 60.0.0.0/8: claimed by rule 'r1' (gA) and rule 'r2' (gB), first one wins
+W 2001:db8::/32: claimed by rule 'r0' (gB) and rule 'r1' (gA), first one wins
+I config: 3 groups, 3 devices, 4 rules, 9 prefixes (10 duplicates dropped)
+-> 9 prefixes
+  1.0.0.0/8 gA r1
+  10.0.0.0/8 gB r0
+  20.0.0.0/8 gB r0
+  30.0.0.0/8 gB r0
+  40.0.0.0/8 gB r0
+  50.0.0.0/8 gB r0
+  60.0.0.0/8 gA r1
+  70.0.0.0/8 gB r2
+  2001:db8::/32 gB r0
+
+== same lists, rules swapped
+D rule 'r3': '@/z/2.lst' -> 3 prefixes
+D rule 'r2': '@/m.lst' -> 4 prefixes
+D rule 'r1': '@/a/*' -> 5 prefixes
+D rule 'r0': '@/z/*' -> 7 prefixes
+W 1.0.0.0/8: claimed by rule 'r2' (gB) and rule 'r1' (gA), first one wins
+W 10.0.0.0/8: claimed by rule 'r3' (gC) and rule 'r2' (gB), first one wins
+W 10.0.0.0/8: claimed by rule 'r3' (gC) and rule 'r1' (gA), first one wins
+W 10.0.0.0/8: claimed by rule 'r3' (gC) and rule 'r0' (gB), first one wins
+W 10.0.0.0/8: claimed by rule 'r3' (gC) and rule 'r0' (gB), first one wins
+W 40.0.0.0/8: claimed by rule 'r3' (gC) and rule 'r0' (gB), first one wins
+W 50.0.0.0/8: claimed by rule 'r3' (gC) and rule 'r1' (gA), first one wins
+W 50.0.0.0/8: claimed by rule 'r3' (gC) and rule 'r0' (gB), first one wins
+W 60.0.0.0/8: claimed by rule 'r2' (gB) and rule 'r1' (gA), first one wins
+W 2001:db8::/32: claimed by rule 'r1' (gA) and rule 'r0' (gB), first one wins
+I config: 3 groups, 3 devices, 4 rules, 9 prefixes (10 duplicates dropped)
+-> 9 prefixes
+  1.0.0.0/8 gB r1
+  10.0.0.0/8 gC r0
+  20.0.0.0/8 gB r3
+  30.0.0.0/8 gB r3
+  40.0.0.0/8 gC r0
+  50.0.0.0/8 gC r0
+  60.0.0.0/8 gB r1
+  70.0.0.0/8 gB r1
+  2001:db8::/32 gA r2
+
+== one rule, files in several cidrsets and globs, duplicates everywhere
+D rule 'r': '@/c.lst' -> 3 prefixes
+D rule 'r': '@/d/*' -> 6 prefixes
+D rule 'r': '@/c.lst' -> 3 prefixes
+I config: 3 groups, 3 devices, 1 rules, 5 prefixes (7 duplicates dropped)
+-> 5 prefixes
+  0.0.0.0/8 gC r0
+  1.0.0.0/8 gC r0
+  2.0.0.0/8 gC r0
+  3.0.0.0/8 gC r0
+  4.0.0.0/8 gC r0
+
+== more than 10 conflicts
+D rule 'ra': '@/a.lst' -> 24 prefixes
+D rule 'rb': '@/b.lst' -> 24 prefixes
+D rule 'rc': '@/c.lst' -> 12 prefixes
+W 10.0.0.0/16: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 10.0.0.0/16: claimed by rule 'ra' (gA) and rule 'rc' (gC), first one wins
+W 10.1.0.0/16: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 10.2.0.0/16: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 10.2.0.0/16: claimed by rule 'ra' (gA) and rule 'rc' (gC), first one wins
+W 10.3.0.0/16: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 10.4.0.0/16: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 10.4.0.0/16: claimed by rule 'ra' (gA) and rule 'rc' (gC), first one wins
+W 10.5.0.0/16: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 10.6.0.0/16: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 10.6.0.0/16: claimed by rule 'ra' (gA) and rule 'rc' (gC), first one wins
+W 10.7.0.0/16: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 10.8.0.0/16: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 10.8.0.0/16: claimed by rule 'ra' (gA) and rule 'rc' (gC), first one wins
+W 10.9.0.0/16: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 10.10.0.0/16: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 10.10.0.0/16: claimed by rule 'ra' (gA) and rule 'rc' (gC), first one wins
+W 10.11.0.0/16: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 2001:db8::/48: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 2001:db8:1::/48: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 2001:db8:2::/48: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 2001:db8:3::/48: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 2001:db8:4::/48: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 2001:db8:5::/48: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 2001:db8:6::/48: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 2001:db8:7::/48: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 2001:db8:8::/48: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 2001:db8:9::/48: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 2001:db8:a::/48: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+W 2001:db8:b::/48: claimed by rule 'ra' (gA) and rule 'rb' (gB), first one wins
+I config: 3 groups, 3 devices, 3 rules, 30 prefixes (30 duplicates dropped)
+-> 30 prefixes
+  10.0.0.0/16 gA r0
+  10.1.0.0/16 gA r0
+  10.2.0.0/16 gA r0
+  10.3.0.0/16 gA r0
+  10.4.0.0/16 gA r0
+  10.5.0.0/16 gA r0
+  10.6.0.0/16 gA r0
+  10.7.0.0/16 gA r0
+  10.8.0.0/16 gA r0
+  10.9.0.0/16 gA r0
+  10.10.0.0/16 gA r0
+  10.11.0.0/16 gA r0
+  10.12.0.0/16 gC r2
+  10.14.0.0/16 gC r2
+  10.16.0.0/16 gC r2
+  10.18.0.0/16 gC r2
+  10.20.0.0/16 gC r2
+  10.22.0.0/16 gC r2
+  2001:db8::/48 gA r0
+  2001:db8:1::/48 gA r0
+  2001:db8:2::/48 gA r0
+  2001:db8:3::/48 gA r0
+  2001:db8:4::/48 gA r0
+  2001:db8:5::/48 gA r0
+  2001:db8:6::/48 gA r0
+  2001:db8:7::/48 gA r0
+  2001:db8:8::/48 gA r0
+  2001:db8:9::/48 gA r0
+  2001:db8:a::/48 gA r0
+  2001:db8:b::/48 gA r0
+
+== lines longer than 511 bytes
+W @/long.lst:2: invalid CIDR 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', skipped
+W @/long.lst:6: invalid CIDR 'bad-after-511', skipped
+W @/long.lst:7: invalid CIDR 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy', skipped
+W @/long.lst:8: invalid CIDR 'yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy7.7.7.0/24', skipped
+W @/long.lst:12: invalid CIDR 'bad-after-510', skipped
+D rule 'r': '@/long.lst' -> 5 prefixes
+I config: 3 groups, 3 devices, 1 rules, 5 prefixes (0 duplicates dropped)
+-> 5 prefixes
+  1.2.3.0/24 gA r0
+  5.5.5.0/24 gA r0
+  6.6.6.0/24 gA r0
+  8.8.8.0/24 gA r0
+  9.9.9.0/24 gA r0
+
+== NUL bytes
+W @/n.lst:4: invalid CIDR 'bad', skipped
+D rule 'r': '@/n.lst' -> 2 prefixes
+I config: 3 groups, 3 devices, 1 rules, 2 prefixes (0 duplicates dropped)
+-> 2 prefixes
+  1.2.3.4/32 gA r0
+  2.0.0.0/8 gA r0
+
+== empty files, comment-only files, a directory, no match, no cidrset
+D rule 'r0': '@/e/*' -> 2 prefixes
+I rule 'r0': cidrset '@/nothing/*.lst' matches nothing
+W config: rule 'r1' has no cidrset
+D rule 'r2': '@/e/2-one.lst' -> 1 prefixes
+W 6.0.0.0/8: claimed by rule 'r0' (gA) and rule 'r2' (gC), first one wins
+I config: 3 groups, 3 devices, 3 rules, 2 prefixes (1 duplicates dropped)
+-> 2 prefixes
+  5.0.0.0/8 gA r0
+  6.0.0.0/8 gA r0
+
+== no rules
+I config: 3 groups, 3 devices, 0 rules, 0 prefixes (0 duplicates dropped)
+-> 0 prefixes
+
+== many files, each sorted, interleaved
+D rule 'r0': '@/many/0*' -> 120 prefixes
+D rule 'r1': '@/many/*' -> 480 prefixes
+W 10.0.0.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.0.1.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.0.6.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.0.7.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.0.12.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.0.18.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.0.23.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.0.24.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.0.29.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.0.35.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.1.0.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.1.1.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.1.6.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.1.7.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.1.12.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.1.18.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.1.23.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.1.24.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.1.29.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.1.35.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.2.0.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.2.1.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.2.6.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.2.7.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.2.12.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.2.18.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.2.23.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.2.24.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.2.29.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.2.35.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.3.0.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.3.1.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.3.6.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.3.7.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.3.12.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.3.18.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.3.23.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.3.24.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.3.29.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.3.35.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.4.0.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.4.1.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.4.6.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.4.7.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.4.12.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.4.18.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.4.23.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.4.24.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.4.29.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.4.35.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.5.0.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.5.1.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.5.6.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.5.7.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.5.12.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.5.18.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.5.23.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.5.24.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.5.29.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 10.5.35.0/24: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:0:1::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:0:6::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:0:7::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:0:c::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:0:12::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:0:17::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:0:18::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:0:1d::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:0:23::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:1::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:1:1::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:1:6::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:1:7::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:1:c::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:1:12::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:1:17::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:1:18::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:1:1d::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:1:23::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:2::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:2:1::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:2:6::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:2:7::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:2:c::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:2:12::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:2:17::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:2:18::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:2:1d::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:2:23::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:3::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:3:1::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:3:6::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:3:7::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:3:c::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:3:12::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:3:17::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:3:18::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:3:1d::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:3:23::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:4::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:4:1::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:4:6::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:4:7::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:4:c::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:4:12::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:4:17::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:4:18::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:4:1d::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:4:23::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:5::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:5:1::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:5:6::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:5:7::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:5:c::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:5:12::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:5:17::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:5:18::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:5:1d::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+W 2001:db8:5:23::/64: claimed by rule 'r0' (gA) and rule 'r1' (gB), first one wins
+I config: 3 groups, 3 devices, 2 rules, 480 prefixes (120 duplicates dropped)
+-> 480 prefixes
+  10.0.0.0/24 gA r0
+  10.0.1.0/24 gA r0
+  10.0.2.0/24 gB r1
+  ...
+  2001:db8:5:25::/64 gB r1
+  2001:db8:5:26::/64 gB r1
+  2001:db8:5:27::/64 gB r1
+  listing hash a20ef40f4fee07c1
+
+== big files across the read window, unsorted, sorted, mixed
+W @/big/u.lst:1: '11.0.0.7/24' has host bits set, using 11.0.0.0/24
+W @/big/u.lst:6: '13.229.12.7/24' has host bits set, using 13.229.12.0/24
+W @/big/u.lst:11: '13.204.7.7/24' has host bits set, using 13.204.7.0/24
+W @/big/u.lst:16: '13.179.2.7/24' has host bits set, using 13.179.2.0/24
+W @/big/u.lst:21: '13.153.13.7/24' has host bits set, using 13.153.13.0/24
+W @/big/u.lst:26: '13.128.8.7/24' has host bits set, using 13.128.8.0/24
+W @/big/u.lst:31: '13.103.3.7/24' has host bits set, using 13.103.3.0/24
+W @/big/u.lst:36: '13.77.14.7/24' has host bits set, using 13.77.14.0/24
+W @/big/u.lst:41: '13.52.9.7/24' has host bits set, using 13.52.9.0/24
+W @/big/u.lst:46: '13.27.4.7/24' has host bits set, using 13.27.4.0/24
+W rule 'u': 6657 more problems in '@/big/u.lst'
+D rule 'u': '@/big/u.lst' -> 20021 prefixes
+D rule 'v': '@/big/v.lst' -> 40021 prefixes
+W 11.0.0.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 11.62.7.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 11.124.14.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 11.187.5.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 11.249.12.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 12.62.3.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 12.124.10.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 12.187.1.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 12.249.8.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 13.61.15.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 13.124.6.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 13.186.13.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 13.249.4.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 14.61.11.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 14.124.2.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 14.186.9.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 14.249.0.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 15.61.7.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 15.123.14.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 15.186.5.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+W 15.248.12.0/24: claimed by rule 'u' (gA) and rule 'v' (gB), first one wins
+I config: 3 groups, 3 devices, 2 rules, 60000 prefixes (42 duplicates dropped)
+-> 60000 prefixes
+  11.0.0.0/24 gA r0
+  11.0.1.0/25 gA r0
+  11.0.2.0/26 gA r0
+  ...
+  2a00:4e:1d::/48 gB r1
+  2a00:4e:1e::/48 gB r1
+  2a00:4e:1f::/48 gB r1
+  listing hash 5da491cf955d19d6
