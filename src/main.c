@@ -27,7 +27,7 @@ int log_level = L_INFO;
 
 /*
  * Everything one rendering is computed from; see struct world. The buffers
- * belong to cfg: allocated when it is taken into use, refilled in place.
+ * belong to cfg: allocated on its first sync, refilled in place.
  */
 struct snap {
 	struct config *cfg;
@@ -40,8 +40,7 @@ struct snap {
 static struct {
 	const char *cfg_path;
 	struct config *cfg;	/* the config in use */
-	struct snap spare;	/* cfg's next snapshot is built here */
-	struct snap extra;	/* cfg's other buffer, while applied isn't cfg's */
+	struct snap spare;	/* cfg's next snapshot is built here (cfg NULL: not yet) */
 	/*
 	 * The world last applied successfully (cfg NULL until then), maybe of
 	 * an older config, which it then owns. It stays prev while later
@@ -291,13 +290,10 @@ static void promote(void)
 	if (old.cfg == rb.cfg) {
 		rb.spare = old;
 	} else {
-		/* an older config's, or none */
-		struct config *cfg = old.cfg;
-
+		/* an older config's, or none: the next sync allocates anew */
+		config_free(old.cfg);
 		snap_free(&old);
-		config_free(cfg);
-		rb.spare = rb.extra;
-		rb.extra = (struct snap){ 0 };
+		rb.spare = (struct snap){ 0 };
 	}
 }
 
@@ -343,7 +339,7 @@ static void sync_now(const char *why, bool full, bool lazy)
 {
 	if (!rb.cfg)
 		return;		/* startup syncs once it's ready */
-	if (refresh_live()) {
+	if (refresh_live() || (!rb.spare.cfg && snap_alloc(&rb.spare, rb.cfg))) {
 		failed();
 		return;
 	}
@@ -357,18 +353,15 @@ static void sync_now(const char *why, bool full, bool lazy)
 }
 
 /*
- * Take cfg into use with its two snapshot buffers (rb.probes already
- * follow it). The old one goes, unless it is still the applied one.
+ * Take cfg into use (rb.probes already follow it). The old one goes,
+ * unless it is still the applied one.
  */
-static void use_config(struct config *cfg, struct snap next[2])
+static void use_config(struct config *cfg)
 {
 	snap_free(&rb.spare);
-	snap_free(&rb.extra);
 	if (rb.cfg != rb.applied.cfg)
 		config_free(rb.cfg);
 	rb.cfg = cfg;
-	rb.spare = next[0];
-	rb.extra = next[1];
 }
 
 /* A netifd mapping or a probe verdict changed. */
@@ -390,7 +383,6 @@ static void retry_cb(struct uloop_timeout *t)
 static void reload(void)
 {
 	struct probes *old_probes = rb.probes;
-	struct snap next[2] = { 0 };
 	struct config *cfg;
 
 	info("reloading %s", rb.cfg_path);
@@ -413,17 +405,15 @@ static void reload(void)
 	}
 
 	/* the old probes point into the old config, which use_config() frees */
-	if (snap_alloc(&next[0], cfg) || snap_alloc(&next[1], cfg) ||
-	    !(rb.probes = probes_new(cfg, probes_changed))) {
+	rb.probes = probes_new(cfg, probes_changed);
+	if (!rb.probes) {
 		err("out of memory");
 		rb.probes = old_probes;
-		snap_free(&next[0]);
-		snap_free(&next[1]);
 		config_free(cfg);
 		return;
 	}
 	probes_free(old_probes);
-	use_config(cfg, next);
+	use_config(cfg);
 
 	if (cfg->gw_table != rb.live.gw_table || cfg->rt_proto != rb.live.own_proto) {
 		rb.live.gw_table = cfg->gw_table;
@@ -532,7 +522,6 @@ int main(int argc, char **argv)
 	}
 
 	{
-		struct snap next[2] = { 0 };
 		struct config *cfg = config_load(rb.cfg_path, NULL);
 
 		if (!cfg)
@@ -551,16 +540,13 @@ int main(int argc, char **argv)
 		/* the probes point into cfg: free them first on failure */
 		netifd_init(netifd_changed);
 		rb.probes = probes_new(cfg, probes_changed);
-		if (!rb.probes || snap_alloc(&next[0], cfg) || snap_alloc(&next[1], cfg)) {
-			snap_free(&next[0]);
-			probes_free(rb.probes);
-			rb.probes = NULL;
+		if (!rb.probes) {
 			config_free(cfg);
 			goto out;
 		}
 		rb.certain = true;
 		rb.retry.cb = retry_cb;
-		use_config(cfg, next);
+		use_config(cfg);
 		/* prev is empty: a full reconcile, in place */
 		sync_now("startup", true, false);
 	}
@@ -587,7 +573,6 @@ out:
 	nl_close(&rb.nl);
 	live_free(&rb.live);
 	snap_free(&rb.spare);
-	snap_free(&rb.extra);
 	if (rb.cfg != rb.applied.cfg)
 		config_free(rb.cfg);
 	{
