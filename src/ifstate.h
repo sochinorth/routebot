@@ -26,9 +26,9 @@ struct defroute {
 
 struct live {
 	struct link *links;
-	size_t n_links;
+	size_t n_links, cap_links;
 	struct defroute *defroutes;
-	size_t n_defroutes;
+	size_t n_defroutes, cap_defroutes;
 
 	uint8_t own_proto;	/* ignore our own default routes */
 	uint32_t gw_table;	/* only default routes from here are tracked */

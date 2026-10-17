@@ -24,6 +24,24 @@ void live_init(struct live *l, const struct config *cfg)
 	l->gw_table = cfg->gw_table;
 }
 
+/* Room for one more after the n of size bytes in *p: it never shrinks. */
+static int grow(void *p, size_t *cap, size_t n, size_t size)
+{
+	void **pp = p, *np;
+	size_t c = *cap ? 2 * *cap : 8;
+
+	if (n < *cap)
+		return 0;
+	np = realloc(*pp, c * size);
+	if (!np) {
+		err("out of memory");
+		return -1;
+	}
+	*pp = np;
+	*cap = c;
+	return 0;
+}
+
 void live_free(struct live *l)
 {
 	free(l->links);
@@ -90,13 +108,8 @@ static void handle_link(struct live *l, const struct nlmsghdr *nlh)
 	mnl_attr_parse(nlh, sizeof(*ifi), link_attr_cb, &name);
 
 	if (!lk) {
-		struct link *nlk = realloc(l->links, (l->n_links + 1) * sizeof(*nlk));
-
-		if (!nlk) {
-			err("out of memory");
+		if (grow(&l->links, &l->cap_links, l->n_links, sizeof(*l->links)))
 			return;
-		}
-		l->links = nlk;
 		lk = &l->links[l->n_links++];
 		memset(lk, 0, sizeof(*lk));
 		lk->ifindex = ifi->ifi_index;
@@ -242,13 +255,8 @@ static void handle_route(struct live *l, const struct nlmsghdr *nlh)
 				l->dirty = true;
 			}
 		} else if (i == l->n_defroutes) {
-			struct defroute *nd = realloc(l->defroutes, (i + 1) * sizeof(*nd));
-
-			if (!nd) {
-				err("out of memory");
+			if (grow(&l->defroutes, &l->cap_defroutes, i, sizeof(*l->defroutes)))
 				return;
-			}
-			l->defroutes = nd;
 			l->defroutes[l->n_defroutes++] = hops[h];
 			l->dirty = true;
 		}
@@ -320,8 +328,6 @@ int live_dump(struct live *l, struct nl *nl)
 	struct rtmsg *rtm;
 	int ret;
 
-	free(l->links);
-	l->links = NULL;
 	l->n_links = 0;
 	l->n_defroutes = 0;
 	l->dirty = true;
