@@ -607,6 +607,21 @@ static int observe_route_cb(const struct nlmsghdr *nlh, void *data)
 	return MNL_CB_OK;
 }
 
+/* Dump routebot's nexthops, and any in its id ranges, into s->k. Returns 0 or -errno. */
+static int observe_nh(struct diff *d)
+{
+	int ret;
+
+	d->s->k.n_nh = 0;
+	d->oom = d->no_nh = false;
+	ret = nl_dump_type(d->nl, RTM_GETNEXTHOP, 0, 0, observe_nh_cb, d);
+	if (ret == -EOPNOTSUPP) {
+		d->no_nh = true;
+		ret = 0;
+	}
+	return ret ? ret : d->oom ? -ENOMEM : 0;
+}
+
 /*
  * Dump routebot's small objects, and nexthops in its id ranges, into s->k,
  * whose buffers only grow. Returns 0 or -errno.
@@ -614,15 +629,9 @@ static int observe_route_cb(const struct nlmsghdr *nlh, void *data)
 static int observe(struct diff *d)
 {
 	struct kstate *k = &d->s->k;
-	int ret;
+	int ret = observe_nh(d);
 
-	k->n_nh = k->n_rules = k->n_routes = d->n_tables = 0;
-	d->oom = d->no_nh = false;
-	ret = nl_dump_type(d->nl, RTM_GETNEXTHOP, 0, 0, observe_nh_cb, d);
-	if (ret == -EOPNOTSUPP) {
-		d->no_nh = true;
-		ret = 0;
-	}
+	k->n_rules = k->n_routes = d->n_tables = 0;
 	if (!ret)
 		ret = nl_dump_type(d->nl, RTM_GETRULE, 0, 0, observe_rule_cb, d);
 	if (!ret && (add_tables(d, d->wc) || add_tables(d, d->pc)))
@@ -1682,9 +1691,9 @@ int sync_check_nhids(struct sync *s, struct nl *nl, const struct config *cfg,
 	int ret;
 
 	set_protos(&d);
-	ret = observe(&d);
+	ret = observe_nh(&d);
 	if (ret) {
-		err("can't read the kernel's state: %s", strerror(-ret));
+		err("can't read the kernel's nexthops: %s", strerror(-ret));
 		return -1;
 	}
 	if (d.no_nh && cfg->n_groups) {
