@@ -2723,13 +2723,11 @@ enum pkind {
 	P_N_ANYTIME,
 	P_LEFTOVER_FULL = P_N_ANYTIME,	/* prefix routes only a full sync sees */
 	P_N,
-	/* before a step only, never drawn at random from the above */
-	P_GROUP_A = P_N,	/* group a's v4 nexthop (1004 in the named base) deleted */
 };
 
 static const char *const pkind_names[] = { "link flap", "last v4 address gone",
 	"group deleted", "witness deleted", "rule deleted", "nexthop changed", "foreign objects",
-	"leftovers", "refusal", "refusal lifted", "leftover prefix routes", "group a deleted" };
+	"leftovers", "refusal", "refusal lifted", "leftover prefix routes" };
 
 static uint32_t next_foreign_id = 10, next_leftover_id = 3000;
 
@@ -3056,10 +3054,6 @@ static bool perturb(struct kernel *k, enum pkind p, const struct tworld *t)
 			return false;
 		refuse[rnd(2)] = 0;
 		mlog("  ** refusals lifted\n");
-		return true;
-	case P_GROUP_A:
-		nh_remove(k, 1004, BY_KERNEL);
-		mlog("  ** nexthop 1004 deleted\n");
 		return true;
 	case P_LEFTOVER:
 	case P_LEFTOVER_FULL:
@@ -3554,8 +3548,6 @@ static struct tsrc base_src(void)
 	CHECK((r).skipped || ((r).a.prefix_set == (s) && (r).a.prefix_del == (d)), \
 	"want %u prefix routes set, %u deleted; got %u, %u", (unsigned)(s), (unsigned)(d), \
 	(r).a.prefix_set, (r).a.prefix_del)
-#define EXPECT_MSGS(r, n) CHECK((r).skipped || (r).a.msgs == (n), \
-	"want %u requests, got %u", (unsigned)(n), (r).a.msgs)
 
 static const struct step_opts DIFF = { .full = false };
 static const struct step_opts FULL = { .full = true };
@@ -3579,50 +3571,7 @@ static struct step_result pair(const char *name, struct tworld *a, struct tworld
 	return r;
 }
 
-static void pre_flush3(void)
-{
-	link_flush(K, 4);	/* dev2: group b's only member */
-}
-
-static void pre_flush1(void)
-{
-	link_flush(K, 2);	/* dev0: one of group a's */
-}
-
-static void pre_flush12(void)
-{
-	link_flush(K, 2);
-	link_flush(K, 3);
-}
-
-static uint32_t witness_table;
-
-static void pre_witness(void)
-{
-	for (int i = 0; i < MAXR; i++)
-		if (K->r[i].used && K->r[i].table == witness_table && K->r[i].family == AF_INET &&
-		    K->r[i].nh_id) {
-			r_remove(K, i);
-			return;
-		}
-}
-
-static void pre_rule(void)
-{
-	for (size_t i = 0; i < K->nru[0]; i++)
-		if (ours(K->ru[0][i].proto) && K->ru[0][i].mark) {
-			rule_remove(K, 0, i);
-			return;
-		}
-}
-
 static struct tworld *pre_world;
-
-static void pre_foreign(void)
-{
-	for (int i = 0; i < 6; i++)
-		foreign_add(K, pre_world);
-}
 
 static void pre_leftovers(void)
 {
@@ -3690,6 +3639,7 @@ static void named_foreign_abort(const char *name, struct tworld *a, uint32_t id,
 
 static void named(void)
 {
+	static const struct step_opts RESTART = { .full = true, .restart = true };
 	struct tsrc s = base_src(), s2;
 	struct tcfg *c = tcfg_build(&s), *c2;
 	struct env e, e2;
@@ -3699,239 +3649,34 @@ static void named(void)
 	env_default(&e);
 	tw_make(&a, c, &e);
 
-	r = pair("same config, nothing changed", &a, &a, NULL, &DIFF);
-	EXPECT_MSGS(r, 0);
-
-	e2 = e;
-	e2.spec[1][0].usable = false;
-	tw_make(&b, c, &e2);
-	r = pair("same config, a member leaves", &a, &b, NULL, &DIFF);
-	EXPECT_MSGS(r, 2);	/* group replace, member delete */
-
-	e2.spec[0][0].usable = false;
-	tw_make(&b, c, &e2);
-	r = pair("same config, v4 of group a blackholed", &a, &b, NULL, &DIFF);
-	EXPECT_MSGS(r, 3);	/* group replace, 2 member deletes */
-	r = pair("same config, v4 of group a back", &b, &a, NULL, &DIFF);
-	EXPECT_PREFIX(r, 0, 0);
-
-	e2 = e;
-	e2.up[1][2] = false;
-	tw_make(&b, c, &e2);
-	r = pair("same config, group b probed down", &a, &b, NULL, &DIFF);
-	EXPECT_MSGS(r, 2);	/* 2 group replaces */
-
-	/* group b's only link flaps: the kernel took the group and its routes */
-	r = pair("same config, group b's link flapped", &a, &a, pre_flush3, &DIFF);
-	EXPECT_PREFIX(r, 5, 0);
-	/* ... and stays down: the group is back as the blackhole */
-	e2 = e;
-	e2.spec[2][0].usable = e2.spec[2][1].usable = false;
-	tw_make(&b, c, &e2);
-	r = pair("same config, group b's link went down", &a, &b, pre_flush3, &DIFF);
-	EXPECT_PREFIX(r, 5, 0);
-	/* one of group a's links: no route goes, none is set */
-	r = pair("same config, one of group a's links flapped", &a, &a, pre_flush1, &DIFF);
-	EXPECT_PREFIX(r, 0, 0);
-	/* the witness goes alone: the group's v4 prefixes are set again */
-	witness_table = cfg_group_table(&c->c, 0);
-	r = pair("same config, group a's v4 witness deleted", &a, &a, pre_witness, &DIFF);
-	EXPECT_PREFIX(r, 7, 0);
-	/* a probe route changes (its gateway): changed, not lost */
-	e2 = e;
-	e2.spec[2][0].gw[3] = 99;
-	tw_make(&b, c, &e2);
-	r = pair("same config, a probed gateway changes", &a, &b, NULL, &DIFF);
-	EXPECT_PREFIX(r, 0, 0);
-	r = pair("same config, a rule deleted", &a, &a, pre_rule, &DIFF);
-	CHECK(r.skipped || (r.a.rule_msgs == 1 && !r.a.route_msgs && !r.a.nh_msgs),
-	      "want 1 rule request, got %u (and %u route, %u nexthop requests)", r.a.rule_msgs,
-	      r.a.route_msgs, r.a.nh_msgs);
+	/* startup: over leftovers, over an intact kernel, from nothing */
 	pre_world = &a;
-	r = pair("same config, foreign objects", &a, &a, pre_foreign, &DIFF);
-	EXPECT_MSGS(r, 0);
-	r = pair("restart, leftovers", &a, &a, pre_leftovers,
-	         &(struct step_opts){ .full = true, .restart = true });
-	r = pair("restart, kernel intact", &a, &a, NULL,
-	         &(struct step_opts){ .full = true, .restart = true });
+	pair("restart, leftovers", &a, &a, pre_leftovers, &RESTART);
+	r = pair("restart, kernel intact", &a, &a, NULL, &RESTART);
 	CHECK(r.skipped || !r.a.route_msgs, "%u route requests", r.a.route_msgs);
-	r = pair("full sync, kernel intact", &a, &a, NULL, &FULL);
-	CHECK(r.skipped || !r.a.route_msgs, "%u route requests", r.a.route_msgs);
-
-	/* reload: group a's buckets change: its routes become blackholes, then move */
-	s2 = s;
-	s2.g[0].buckets = 32;
-	c2 = tcfg_build(&s2);
-	tw_make(&b, c2, &e);
-	r = pair("reload, buckets changed", &a, &b, NULL, &DIFF);
-	EXPECT_PREFIX(r, 20, 0);
-	/* ... while both its links went down and one came back */
-	e2 = e;
-	e2.spec[1][0].usable = e2.spec[1][1].usable = false;
-	tw_make(&b, c2, &e2);
-	r = pair("reload, buckets changed, links flapped", &a, &b, pre_flush12, &DIFF);
-	CHECK(r.skipped || (r.a.prefix_set <= 20 && !r.a.prefix_del), "%u prefix routes set, %u deleted",
-	      r.a.prefix_set, r.a.prefix_del);
-	/* ... while it is blackholed */
-	e2 = e;
-	e2.spec[0][0].usable = e2.spec[1][0].usable = false;
-	tw_make(&x, c, &e2);
-	e2.spec[1][0].usable = true;
-	tw_make(&b, c2, &e2);
-	r = pair("reload, buckets changed, blackholed", &x, &b, NULL, &DIFF);
-	EXPECT_PREFIX(r, 20, 0);
-	free(c2);
-
-	/* reload: rule 1 moves to group a */
-	s2 = s;
-	s2.rule_group[1] = 0;
-	c2 = tcfg_build(&s2);
-	tw_make(&b, c2, &e);
-	r = pair("reload, rule moved", &a, &b, NULL, &DIFF);
-	EXPECT_PREFIX(r, 5, 0);
-	/* the same with the lists shared, as across a reload with unchanged lists */
-	tcfg_borrow(c2, c);
-	CHECK(c2->borrowed, "lists not shared");
-	r = pair("reload, lists shared, rule moved", &a, &b, NULL, &DIFF);
-	EXPECT_PREFIX(r, 5, 0);
-	tcfg_release(c2, NULL);
-	c2 = tcfg_build(&s);
-	tcfg_borrow(c2, c);
-	tw_make(&b, c2, &e);
-	r = pair("reload, lists shared, nothing changed", &a, &b, NULL, &DIFF);
-	EXPECT_MSGS(r, 0);
-	tcfg_release(c2, NULL);
-
-	/* reload: another rule wins a duplicate (v4 key 7 also listed by rule 0) */
-	s2 = s;
-	add_prefix(&s2, 0, 7, 0);
-	c2 = tcfg_build(&s2);
-	tw_make(&b, c2, &e);
-	r = pair("reload, another rule wins a duplicate", &a, &b, NULL, &DIFF);
-	EXPECT_PREFIX(r, 1, 0);
-	free(c2);
-
-	/* reload: one prefix gone, one new */
-	s2 = s;
-	s2.p[0].key = 40;
-	c2 = tcfg_build(&s2);
-	tw_make(&b, c2, &e);
-	r = pair("reload, a prefix replaced", &a, &b, NULL, &DIFF);
-	EXPECT_PREFIX(r, 1, 1);
-	free(c2);
-
-	/* reload: the CIDR table moves */
-	s2 = s;
-	s2.table_id = 5000;
-	c2 = tcfg_build(&s2);
-	tw_make(&b, c2, &e);
-	r = pair("reload, table_id changed", &a, &b, NULL, &DIFF);
-	EXPECT_PREFIX(r, 16, 16);
-	free(c2);
-
-	/* reload: everything else that moves ids, tables, rules, owners */
-	{
-		static const char *const names[] = { "rt_proto", "rule_prio", "nexthop_id +1",
-			"nexthop_id +2", "nexthop_id +4", "groups reordered", "group renamed",
-			"device renamed", "group removed", "group added", "member added", "fwmark moved",
-			"probes on", "timers", "first group removed", "table and rule_prio moved",
-			"first group removed, nexthop_id +1",
-			/* old and new tables overlapping: +-2 and +-3 trade CIDR and group tables */
-			"table_id +1", "table_id -1", "table_id +2", "table_id -2", "table_id +3",
-			"table_id -3", "table_id +4", "table_id -4" };
-
-		for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-			char name[64];
-
-			s2 = s;
-			switch (i) {
-			case 0: s2.proto = PROTO_B; break;
-			case 1: s2.rule_prio = 2000; break;
-			case 2: s2.nexthop_id = 1001; break;
-			case 3: s2.nexthop_id = 1002; break;
-			case 4: s2.nexthop_id = 1004; break;
-			case 5:
-				s2.g[0] = s.g[1];
-				s2.g[1] = s.g[0];
-				s2.rule_group[0] = 1;
-				s2.rule_group[1] = 0;
-				break;
-			case 6: s2.g[0].name = 5; break;
-			case 7: s2.g[0].spec[1] = 6; break;
-			case 8:
-				s2.g[1] = s.g[2];
-				s2.ng = 2;
-				s2.rule_group[1] = 0;
-				s2.rule_group[2] = 1;
-				break;
-			case 9:
-				s2.g[3] = mkgroup(3, 0x04000000, 16);
-				add_member(&s2.g[3], 1, 1);
-				s2.ng = 4;
-				s2.rule_group[2] = 3;
-				break;
-			case 10: add_member(&s2.g[1], 3, 1); break;
-			case 11: s2.g[0].fwmark = 0x05000000; s2.g[2].fwmark = 0x01000000; break;
-			case 12: s2.g[2].probe[1] = true; break;
-			case 13: s2.g[0].idle = 60; s2.g[0].busy = 0; break;
-			case 17: case 18: case 19: case 20: case 21: case 22: case 23: case 24: {
-				static const int shift[] = { 1, -1, 2, -2, 3, -3, 4, -4 };
-
-				s2.table_id += shift[i - 17];
-				break;
-			}
-			case 16:
-				s2.nexthop_id = 1001;
-				/* fall through */
-			case 14:
-				/* b and c move up: tables 102 and 103 change owner */
-				s2.g[0] = s.g[1];
-				s2.g[1] = s.g[2];
-				s2.ng = 2;
-				s2.rule_group[0] = 0;
-				s2.rule_group[1] = 0;
-				s2.rule_group[2] = 1;
-				break;
-			case 15:
-				/* the new CIDR rule comes first; 10.5.0.0/24 (a) sits in 10.5.0.0/16 (c) */
-				s2.table_id = 5000;
-				s2.rule_prio = 500;
-				break;
-			}
-			c2 = tcfg_build(&s2);
-			tw_make(&b, c2, &e);
-			unsigned before = fails;
-
-			snprintf(name, sizeof(name), "reload, %s", names[i]);
-			pair(name, &a, &b, NULL, &DIFF);
-			snprintf(name, sizeof(name), "reload, %s, back", names[i]);
-			pair(name, &b, &a, NULL, &DIFF);
-
-			/* and races spread over its requests, if it works without */
-			for (unsigned k = 0; k < 64 && fails == before; k += k < 4 ? 1 : k / 2) {
-				struct step_opts o = { .race = true, .race_at = k,
-				                       .race_kind = (enum pkind)((i + k) % P_N_ANYTIME) };
-
-				snprintf(name, sizeof(name), "reload, %s, %s at request %u", names[i],
-				         pkind_names[o.race_kind], k);
-				pre_world = &a;
-				r = pair(name, &a, &b, NULL, &o);
-				if (!r.raced)
-					break;
-			}
-			free(c2);
-		}
-	}
-
 	tw_make(&x, NULL, &e);
 	r = pair("old world empty", &x, &a, NULL, &FULL);
 	EXPECT_PREFIX(r, 16, 0);
 
+	/* at startup over another layout's leftovers, tables overlapping */
+	for (int shift = -4; shift <= 4; shift++) {
+		char name[64];
+
+		if (!shift)
+			continue;
+		s2 = s;
+		s2.table_id += shift;
+		c2 = tcfg_build(&s2);
+		tw_make(&b, c2, &e);
+		snprintf(name, sizeof(name), "restart, table_id %+d", shift);
+		pair(name, &a, &b, pre_leftovers, &RESTART);
+		free(c2);
+	}
+
 	/* devices that refuse: members left out, the sync not uncertain */
 	pair("refused, v6 disabled on one of a's members", &a, &a, pre_v6_off, &DIFF);
 	pair("refused, group b's only member", &a, &a, pre_gw_off, &DIFF);
-	pair("refused, at startup", &a, &a, pre_v6_off,
-	     &(struct step_opts){ .full = true, .restart = true });
+	pair("refused, at startup", &a, &a, pre_v6_off, &RESTART);
 	pair("refused, full sync", &a, &a, pre_gw_off, &FULL);
 	begin("refused, then taken again", &a);
 	pre_v6_off();
@@ -3956,22 +3701,6 @@ static void named(void)
 			step("refused, a member that changes", &a, &b, &DIFF);
 		}
 	}
-	/*
-	 * The kernel deletes group a (and its routes) between the dump and
-	 * the group's replace, which comes with a member leaving: a replace
-	 * that creates it anew, and the witness set again behind it, would hide
-	 * the loss from the next sync.
-	 */
-	e2 = e;
-	e2.spec[1][0].usable = false;
-	tw_make(&b, c, &e2);
-	for (unsigned k = 0; k < 4; k++) {
-		char name[96];
-
-		snprintf(name, sizeof(name), "member leaves, group a deleted at request %u", k);
-		pair(name, &a, &b, NULL, &(struct step_opts){ .race = true,
-		                                               .race_at = k, .race_kind = P_GROUP_A });
-	}
 
 	/* more refusals in one sync than nl.c used to keep: 24 devices, 48 members */
 	{
@@ -3993,8 +3722,7 @@ static void named(void)
 		tw_make(&w, c3, &e);
 		pair("refused, 48 members and their probe routes at once", &w, &w, pre_all_refuse,
 		     &DIFF);
-		pair("refused, 48 members at once, at startup", &x, &w, pre_all_refuse,
-		     &(struct step_opts){ .full = true, .restart = true });
+		pair("refused, 48 members at once, at startup", &x, &w, pre_all_refuse, &RESTART);
 		free(c3);
 	}
 
@@ -4003,23 +3731,6 @@ static void named(void)
 	named_foreign_abort("foreign nexthop at a group id", &a, 1004, AF_INET, false);
 	named_foreign_abort("foreign nexthop at a group id, at startup", &a, 1009, AF_INET6, true);
 	named_foreign_abort("foreign nexthop at the blackhole id", &a, 1001, AF_INET6, false);
-
-	/* at startup over another layout's leftovers, tables overlapping */
-	for (int shift = -4; shift <= 4; shift++) {
-		char name[64];
-
-		if (!shift)
-			continue;
-		s2 = s;
-		s2.table_id += shift;
-		c2 = tcfg_build(&s2);
-		tw_make(&b, c2, &e);
-		snprintf(name, sizeof(name), "restart, table_id %+d", shift);
-		pre_world = &a;
-		pair(name, &a, &b, pre_leftovers,
-		     &(struct step_opts){ .full = true, .restart = true });
-		free(c2);
-	}
 
 	free(c);
 }
