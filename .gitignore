@@ -3,3 +3,4 @@
 build/
 .claude/worktrees/
 build-*/
+compile_commands.json
