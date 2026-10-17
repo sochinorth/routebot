@@ -3408,8 +3408,6 @@ static struct step_result step(const char *what, struct tworld *prev, struct two
 		CHECK(acc.unexpected == acc.refused && (refusals() || !st.errors),
 		      "%u requests failed (%u refused by devices), %u errors, with nothing in "
 		      "their way", acc.unexpected, acc.refused, st.errors);
-		CHECK(!(intact && !o->restart && prev->tc == want->tc && !refusals()) || !st.lost,
-		      "%u objects reported lost from an intact kernel", st.lost);
 		/* what the kernel refuses is asked again on every sync */
 		if (intact && !refusals() && !o->full && prev->tc == want->tc &&
 		    !memcmp(&prev->env, &want->env, sizeof(prev->env)))

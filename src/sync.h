@@ -20,7 +20,6 @@ struct sync_stats {
 	unsigned rule_add;
 	unsigned rule_del;
 	unsigned errors;	/* unexpected netlink errors, failed dumps, OOM */
-	unsigned lost;		/* objects the kernel lost behind routebot's back */
 	size_t kept;		/* full reconcile: prefix routes found in place */
 };
 
@@ -50,10 +49,10 @@ bool world_member_usable(const struct world *w, size_t g, size_t m, int f);
  * layout names the owners of kernel ids (a group's name, a device's spec),
  * its prefix routes are what a sync not full believes installed, its
  * rt_proto is observed too, and what it rendered tells what the kernel
- * lost (logged, counted in st->lost) from what is merely new. prev->cfg
- * may be want->cfg. prev->cfg == NULL implies full. A layout change
- * (prev's table_id, rule_prio, nexthop_id or rt_proto not want's) turns
- * prev's groups into blackholes in place first, then is full.
+ * lost (logged) from what is merely new. prev->cfg may be want->cfg.
+ * prev->cfg == NULL implies full. A layout change (prev's table_id,
+ * rule_prio, nexthop_id or rt_proto not want's) turns prev's groups into
+ * blackholes in place first, then is full.
  *
  * A member nexthop the kernel refuses is left out of its groups (logged),
  * along with its probe route; that's no failure.

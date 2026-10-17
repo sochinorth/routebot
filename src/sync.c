@@ -1274,13 +1274,12 @@ static int find_reset(const struct diff *d)
 	return 0;
 }
 
-static void lost(const struct diff *d, const char *who, const char *what, int f)
+static void lost(const char *who, const char *what, int f)
 {
 	info("%s: kernel lost its %s %s, restoring", who, fam_name(f), what);
-	d->st->lost++;
 }
 
-/* What prev had installed, want still has, and the kernel lost: said once, counted. */
+/* What prev had installed, want still has, and the kernel lost: said once. */
 static void log_lost(const struct diff *d)
 {
 	const struct plan *pp = d->pp, *pw = d->pw;
@@ -1297,7 +1296,7 @@ static void log_lost(const struct diff *d)
 		if (plan_nh(pp, n->id) && same_owner(pc, wc, n->id) == 1 && owner_of(wc, n->id, &o) &&
 		    o.kind != 'b' && (g < pw->n_groups ? pc->table_id == wc->table_id &&
 		                      !witness_ok(d, g / 2, o.f) : !k_nh(d, n->id)))
-			lost(d, o.name, g < pw->n_groups ? "group" : "nexthop", o.f);
+			lost(o.name, g < pw->n_groups ? "group" : "nexthop", o.f);
 	}
 	for (size_t i = 0; i < pw->n_small; i++) {
 		struct route_spec k = pw->small[i];	/* as prev had it */
@@ -1307,15 +1306,13 @@ static void log_lost(const struct diff *d)
 		if (k.table == cfg_probe_table(wc) && !k_has_route(d, &pw->small[i]) &&
 		    dev < pc->n_devices && !strcmp(pc->devices[dev].spec, wc->devices[dev].spec) &&
 		    small_has(pp, &k, route_eq))
-			lost(d, wc->devices[dev].spec, "probe route", k.family == AF_INET6);
+			lost(wc->devices[dev].spec, "probe route", k.family == AF_INET6);
 	}
 	for (size_t i = 0; i < pw->n_rules; i++)
 		if (!rule_in(d->k->rules, d->k->n_rules, &pw->rules[i]) &&
-		    rule_in(pp->rules, pp->n_rules, &pw->rules[i])) {
+		    rule_in(pp->rules, pp->n_rules, &pw->rules[i]))
 			info("kernel lost the %s rule at %u, restoring",
 			     fam_name(pw->rules[i].family == AF_INET6), pw->rules[i].prio);
-			d->st->lost++;
-		}
 }
 
 /* Does deleting the doomed take a member out of the kernel's group kn? */
