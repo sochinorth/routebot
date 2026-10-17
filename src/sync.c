@@ -785,7 +785,6 @@ static void prefix_send(const struct diff *d, enum nl_op op, const struct config
 		d->st->route_set++;
 }
 
-/* Entry i of c's family f list, off its nexthop: a plain blackhole. */
 /* By r's key: NL_DEL deletes it, NL_SET makes it a plain blackhole. */
 static void route_off(struct nl *nl, enum nl_op op, const struct route_spec *r)
 {
@@ -795,6 +794,7 @@ static void route_off(struct nl *nl, enum nl_op op, const struct route_spec *r)
 	nl_route(nl, op, &b);
 }
 
+/* Entry i of c's family f list, off its nexthop: a plain blackhole. */
 static void prefix_detach(const struct diff *d, const struct config *c, int f, size_t i)
 {
 	struct route_spec r;
