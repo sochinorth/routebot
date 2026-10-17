@@ -112,7 +112,6 @@ int nl_open(struct nl *nl)
 	nl->dump = mnl_socket_open2(NETLINK_ROUTE, SOCK_CLOEXEC);
 	if (!nl->dump || mnl_socket_bind(nl->dump, 0, MNL_SOCKET_AUTOPID) < 0)
 		goto fail;
-	set_rcvbuf(nl->dump);
 	mnl_socket_setsockopt(nl->dump, NETLINK_EXT_ACK, &one, sizeof(one));
 	mnl_socket_setsockopt(nl->dump, NETLINK_GET_STRICT_CHK, &one, sizeof(one));
 
