@@ -26,9 +26,6 @@
 #define PAYLOAD_LEN	16
 #define RECV_LEN	512
 
-struct probes;
-struct pmember;
-
 /* One raw socket: member x family. */
 struct psock {
 	struct uloop_fd ufd;	/* fd < 0: closed or failed to bind */
@@ -42,7 +39,6 @@ struct psock {
 
 struct pmember {
 	struct pgroup *g;
-	size_t idx;
 	char netdev[IFNAMSIZ];	/* "" = unresolved */
 	bool usable;
 	bool up;		/* combined verdict */
@@ -116,7 +112,7 @@ static void member_eval(struct pmember *m, bool quiet)
 
 static void sock_result(struct psock *s, bool ok)
 {
-	uint8_t need = s->m->g->cg->probe_count ? s->m->g->cg->probe_count : 1;
+	uint8_t need = s->m->g->cg->probe_count;
 
 	if (ok) {
 		s->losses = 0;
@@ -314,7 +310,7 @@ static void tick_cb(struct uloop_timeout *t)
 {
 	struct pgroup *g = container_of(t, struct pgroup, tick);
 
-	uloop_timeout_set(t, g->cg->probe_timer_ms ? g->cg->probe_timer_ms : 1000);
+	uloop_timeout_set(t, g->cg->probe_timer_ms);
 	for (size_t i = 0; i < g->cg->n_members; i++) {
 		for (int f = 0; f < 2; f++) {
 			struct psock *s = &g->members[i].s[f];
@@ -356,7 +352,6 @@ struct probes *probes_new(const struct config *cfg, void (*changed)(void))
 			struct pmember *m = &g->members[i];
 
 			m->g = g;
-			m->idx = i;
 			m->up = true;
 			for (int f = 0; f < 2; f++) {
 				m->s[f].m = m;
@@ -365,7 +360,7 @@ struct probes *probes_new(const struct config *cfg, void (*changed)(void))
 				sock_reset(&m->s[f]);
 			}
 		}
-		uloop_timeout_set(&g->tick, g->cg->probe_timer_ms ? g->cg->probe_timer_ms : 1000);
+		uloop_timeout_set(&g->tick, g->cg->probe_timer_ms);
 	}
 	return p;
 
