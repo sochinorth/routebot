@@ -32,8 +32,7 @@ int log_level = L_INFO;
 struct snap {
 	struct config *cfg;
 	struct ifview *ifs;
-	const char **netdev;		/* point into names */
-	char (*names)[IFNAMSIZ];
+	char (*netdev)[IFNAMSIZ];
 	bool *member_up;
 };
 
@@ -81,7 +80,6 @@ static void snap_free(struct snap *s)
 {
 	free(s->ifs);
 	free(s->netdev);
-	free(s->names);
 	free(s->member_up);
 	*s = (struct snap){ 0 };
 }
@@ -93,16 +91,13 @@ static int snap_alloc(struct snap *s, struct config *cfg)
 	s->cfg = cfg;
 	s->ifs = calloc(n_dev, sizeof(*s->ifs));
 	s->netdev = calloc(n_dev, sizeof(*s->netdev));
-	s->names = calloc(n_dev, sizeof(*s->names));
 	s->member_up = calloc(cfg_member_index(cfg, cfg->n_groups, 0) + 1,
 	                      sizeof(*s->member_up));
-	if (!s->ifs || !s->netdev || !s->names || !s->member_up) {
+	if (!s->ifs || !s->netdev || !s->member_up) {
 		err("out of memory");
 		snap_free(s);
 		return -1;
 	}
-	for (size_t d = 0; d < cfg->n_devices; d++)
-		s->netdev[d] = s->names[d];
 	return 0;
 }
 
@@ -123,7 +118,7 @@ static void snap_fill(struct snap *s)
 		/* too long for a netdev: can't resolve */
 		if (strlen(name) >= IFNAMSIZ)
 			name = "";
-		strcpy(s->names[d], name);
+		strcpy(s->netdev[d], name);
 	}
 	for (size_t g = 0; g < cfg->n_groups; g++)
 		for (size_t i = 0; i < cfg->groups[g].n_members; i++)

@@ -73,10 +73,10 @@ int live_event_cb(const struct nlmsghdr *nlh, void *data);
 
 /*
  * Compute the per-device view for cfg; out has cfg->n_devices entries.
- * netdev[d] names device d's kernel netdev; NULL or "" = unresolved.
+ * netdev[d] names device d's kernel netdev; "" = unresolved.
  */
 void live_resolve(const struct live *l, const struct config *cfg,
-                  const char *const *netdev, struct ifview *out);
+                  char (*netdev)[IFNAMSIZ], struct ifview *out);
 
 bool ifrender_eq(const struct ifrender *a, const struct ifrender *b);
 

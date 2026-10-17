@@ -367,14 +367,14 @@ int live_dump(struct live *l, struct nl *nl)
 /* --- resolve --- */
 
 void live_resolve(const struct live *l, const struct config *cfg,
-                  const char *const *netdev, struct ifview *out)
+                  char (*netdev)[IFNAMSIZ], struct ifview *out)
 {
 	for (size_t i = 0; i < cfg->n_devices; i++) {
 		const struct cfg_device *dev = &cfg->devices[i];
 		const struct link *lk = NULL;
 
 		memset(&out[i], 0, sizeof(out[i]));
-		if (netdev[i] && *netdev[i])
+		if (*netdev[i])
 			lk = link_by_name(l, netdev[i]);
 		if (!lk || (lk->flags & LINK_USABLE) != LINK_USABLE)
 			continue;
