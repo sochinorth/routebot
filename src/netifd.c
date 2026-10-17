@@ -285,13 +285,12 @@ static void connect_cb(struct uloop_timeout *t)
  * is there before the first config resolve; changed() is only called for
  * later changes, never from here.
  */
-int netifd_init(void (*changed)(void))
+void netifd_init(void (*changed)(void))
 {
 	nd.connect.cb = connect_cb;
 	nd.dump.cb = dump_timer_cb;
 	connect_cb(&nd.connect);
 	nd.changed = changed;
-	return 0;
 }
 
 void netifd_done(void)
@@ -319,9 +318,8 @@ const char *netifd_l3dev(const char *spec)
 
 #else
 
-int netifd_init(void (*changed)(void))
+void netifd_init(void (*changed)(void))
 {
-	return 0;
 }
 
 void netifd_done(void)

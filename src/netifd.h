@@ -8,7 +8,7 @@
  */
 
 /* changed() is called (from the uloop) whenever the mapping changes. */
-int netifd_init(void (*changed)(void));
+void netifd_init(void (*changed)(void));
 void netifd_done(void);
 
 /*
