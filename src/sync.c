@@ -446,7 +446,7 @@ struct sync {
 	struct idset reset;		/* groups whose prefix routes are set again */
 	uint32_t *tables;		/* the observed tables */
 	size_t cap_tables;
-	uint8_t *bits;			/* full reconcile: per prefix, 2 bits */
+	uint8_t *bits;			/* during a full reconcile: per prefix, 2 bits */
 	size_t cap_bits;
 };
 
@@ -1040,6 +1040,14 @@ static int scan_cb(const struct nlmsghdr *nlh, void *data)
 	return MNL_CB_OK;
 }
 
+/* The bits go with the full sync that needed them. */
+static void bits_free(struct sync *s)
+{
+	free(s->bits);
+	s->bits = NULL;
+	s->cap_bits = 0;
+}
+
 /* Dump every route with routebot's protos, classify it, keep nothing but bits. */
 static int scan_routes(const struct diff *d, struct scan *sc)
 {
@@ -1544,6 +1552,7 @@ int sync_apply(struct sync *s, struct nl *nl, const struct world *prev,
 			ret = sweep_protos(&d, pred_unwanted_off, NL_SET);
 		uncertain += st->errors - before;
 		if (ret) {
+			bits_free(s);
 			err("reconcile: %s", strerror(-ret));
 			st->errors++;
 			return -1;
@@ -1580,6 +1589,7 @@ int sync_apply(struct sync *s, struct nl *nl, const struct world *prev,
 	small_routes_del(&d, false);
 	if (d.full) {
 		uncertain += batch_end(&d);
+		bits_free(s);
 		info("reconcile: %zu prefix routes in place", st->kept);
 		if (sc.n_unwanted) {
 			unsigned before = st->errors;
