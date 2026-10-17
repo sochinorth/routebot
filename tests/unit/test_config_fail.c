@@ -116,7 +116,7 @@ int main(void)
 		die("mkdtemp");
 
 	/*
-	 * a few read windows' worth (64 KiB each), so a read fails mid-file,
+	 * a few read windows' worth (16 KiB each), so a read fails mid-file,
 	 * and enough prefixes for the build arrays to grow a few times
 	 */
 	snprintf(lst, sizeof(lst), "%s/a.lst", base);

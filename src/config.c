@@ -650,7 +650,7 @@ static size_t prefix_build_finish(struct prefix_build *b, int family, void **out
  * cut every 511 bytes, as the fgets() with a 512-byte buffer this replaced
  * did: the rest of an over-long line is a line of its own.
  */
-#define LIST_WINDOW	65536
+#define LIST_WINDOW	16384
 #define LIST_LINE	511
 
 static char list_window[LIST_WINDOW];
