@@ -3346,6 +3346,16 @@ static void fresh_install(struct tworld *w, struct kernel *out)
 static struct kernel kfresh, kref, kprev;
 
 /*
+ * The prev of the sync after one that returned ret, as main.c's sync_to()
+ * decides it: only a successful sync promotes want, a failed one keeps the
+ * last applied world (a restart's: nothing) until a sync succeeds.
+ */
+static struct tworld *next_prev(struct tworld *prev, struct tworld *want, int ret)
+{
+	return ret ? prev : want;
+}
+
+/*
  * The kernel holds prev (more or less: perturbed already); bring it to want
  * and check everything.
  */
@@ -3427,11 +3437,12 @@ static struct step_result step(const char *what, struct tworld *prev, struct two
 	/* the next sync repairs what got in the way: a retry, or the event's */
 	if (res.ret || race.hit) {
 		bool m = res.ret;
+		struct tworld *np = next_prev(prev, want, res.ret);
 		int ret;
 
 		totals.followups++;
 		mlog("  follow-up (%s):\n", m ? "full" : "diff");
-		ret = apply(tw_world(want), want, want, m, &st);
+		ret = apply(m && o->restart ? tw_world(&empty_world) : tw_world(np), np, want, m, &st);
 		if (ret && !m) {
 			totals.full_retries++;
 			mlog("  follow-up (full):\n");

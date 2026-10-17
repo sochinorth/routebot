@@ -1434,24 +1434,52 @@ static bool layout_changes(const struct config *pc, const struct config *wc)
 	              pc->nexthop_id != wc->nexthop_id || pc->rt_proto != wc->rt_proto);
 }
 
+/* Does the kernel hold kn as one of prev's family f groups? */
+static bool prev_group(const struct diff *d, const struct nexthop_spec *kn, int f)
+{
+	if (!kn || !kn->n_grp || !is_ours(d, kn->proto))
+		return false;
+	for (size_t i = 0; i < kn->n_grp; i++) {
+		const struct nexthop_spec *e = k_nh(d, kn->grp[i].id);
+		struct owner o;
+
+		if (!e || e->n_grp || e->family != families[f] ||
+		    !owner_of(d->pc, e->id, &o) || o.kind == 'g' || o.f != f)
+			return false;
+	}
+	return true;
+}
+
 /*
  * Before a layout change, prev's groups become their family's blackhole in
- * place: what's on them drops traffic until the new layout is set.
+ * place: what's on them drops traffic until the new layout is set. Only
+ * what the kernel still holds as prev's: after a failed sync, some of it
+ * may be want's already, left to the reconcile.
  */
 static unsigned groups_blackhole(struct diff *d)
 {
+	bool bh[2] = { false, false };
+
 	nl_batch_begin(d->nl);
-	for (size_t i = 0; i < d->pp->n_members; i++)
-		if (d->pp->members[i].blackhole) {
-			nl_nexthop(d->nl, NL_SET, &d->pp->members[i]);
-			d->st->nh_set++;
-		}
+	for (size_t i = 0; i < d->pp->n_members; i++) {
+		const struct nexthop_spec *b = &d->pp->members[i];
+		const struct nexthop_spec *kb = k_nh(d, b->id);
+
+		if (!b->blackhole || (kb && !nh_eq(kb, b)))
+			continue;
+		bh[b->family == AF_INET6] = true;
+		if (kb)
+			continue;
+		nl_nexthop(d->nl, NL_SET, b);
+		d->st->nh_set++;
+	}
 	for (size_t i = 0; i < d->pp->n_groups; i++) {
 		const struct nexthop_spec *g = &d->pp->groups[i];
 		const struct nexthop_spec *kn = k_nh(d, g->id);
+		int f = g->family == AF_INET6;
 		struct nexthop_spec n;
 
-		if (!kn || !kn->n_grp || !is_ours(d, kn->proto))
+		if (!bh[f] || !prev_group(d, kn, f))
 			continue;
 		n = *kn;
 		n.n_grp = 1;
