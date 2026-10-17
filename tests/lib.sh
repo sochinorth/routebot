@@ -5,7 +5,8 @@
 # namespace (no root needed), then sets up:
 #   T      a temp dir, removed on exit
 #   LOG    routebot's log ($T/log)
-#   PID    the running routebot, killed on exit
+#   PID    the running routebot, killed on exit (stop sends SIGTERM,
+#          which leaves the kernel as it is; flush runs routebot -F)
 #   FAILS  failed checks so far
 # The caller sets RB (the binary) before calling start.
 #
@@ -78,10 +79,21 @@ start() {
 	wait_log "running"
 }
 
+# SIGTERM: routebot exits, leaving the kernel as it is
 stop() {
+	mark
 	kill -TERM "$PID"
 	wait "$PID" && pass "exit status 0" || fail "exit status $?"
 	PID=
+	wait_log "exiting, routes left in place"
+}
+
+# routebot -F: removes everything with the config's rt_proto
+flush() {
+	mark
+	# shellcheck disable=SC2086 # RB_ENV and RB_ARGS are word lists
+	if timeout 30 ${RB_ENV:-} "$RB" -F ${RB_ARGS--v} -c "$T/config" >> "$LOG" 2>&1
+	then pass "flush: exit status 0"; else fail "flush: exit status $?"; fi
 }
 
 hup() { mark; kill -HUP "$PID"; }
@@ -109,10 +121,12 @@ kstate() {
     ip -6 rule | grep "proto ${RB_PROTO:-233}" || true
 }
 
-# the kernel holds what a fresh start would install: restart and compare
+# the kernel holds what a fresh start would install: stop, flush, start
+# and compare
 same_as_fresh() {
     kstate > "$T/state.now"
     stop
+    flush
     start
     kstate > "$T/state.fresh"
     if cmp -s "$T/state.now" "$T/state.fresh"; then pass "$1: same as a fresh start"

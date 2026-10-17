@@ -3,7 +3,7 @@
 # routebot's proto (and more: tos, v6 source prefixes, multipath, metrics,
 # duplicate keys, more than a chunk of routes), removed by the startup
 # reconcile and nothing of anyone else's touched; then routebot's own
-# state, removed by the flush on exit.
+# state, left in place by SIGTERM and removed by routebot -F.
 # usage: tests/flush.sh path/to/routebot
 set -eu
 
@@ -107,18 +107,22 @@ foreign
 # routebot's own state is that of a clean start
 same_as_fresh "startup reconcile"
 
-echo "== exit flush: routebot's own state goes"
+echo "== routebot -F: routebot's own state goes"
 has "default nhid 10004 dev vpn0 proto 233" ip route show table 10002
 has "blackhole default proto 233 metric 4294967295" ip route show table 10002
 has "blackhole default dev lo proto 233 metric 4294967295 pref medium" ip -6 route show table 10002
 has "id 10000 blackhole proto 233" ip nexthop show
 has "id 10001 blackhole proto 233" ip nexthop show
-# what the exit flush has to delete one by one: routes not on a group,
+# what the flush has to delete one by one: routes not on a group,
 # the blackholes behind the group table's defaults
-mark
+kstate > "$T/state.before"
 stop
+kstate > "$T/state.after"
+cmp -s "$T/state.before" "$T/state.after" && pass "SIGTERM left the state in place" ||
+	fail "SIGTERM changed the state"
+flush
 grep -qF "flush: removed 4 rules, 6 nexthops and the routes on them, 2 other routes with proto 233" "$LOG" &&
-	pass "exit flush counted" || fail "exit flush miscounted: $(grep 'flush:' "$LOG" | tail -n 1)"
+	pass "flush counted" || fail "flush miscounted: $(grep 'flush:' "$LOG" | tail -n 1)"
 not_logged "left"
 empty kstate
 foreign

@@ -239,6 +239,21 @@ def report(snaps_path, meta_path, out_path):
 				res["memory"].setdefault("exit", {})["VmHWM_kB"] = ms["exit_maxrss_kb"]
 		if "wall_s" in ex:
 			res["shutdown"]["wall_ms"] = ex["wall_s"] * 1000
+	# routebot -F, a process of its own: all of it from the shim's exit record
+	if "flush" in by:
+		fl = by["flush"][-1]
+		ms = fl.get("ms", {})
+		res["flush"] = {"allocs": ms.get("n_allocs"), "bytes": ms.get("bytes"),
+				"heap_peak_kB": round(ms.get("peak_live", 0) / 1024)}
+		if ms.get("exited"):
+			user, sys_ = ms["exit_utime_us"] / 1000, ms["exit_stime_us"] / 1000
+			res["flush"].update({
+				"user_ms": round(user, 1), "sys_ms": round(sys_, 1),
+				"cpu_ms": round(user + sys_, 1), "sched_cpu_ms": ms["exit_sched_ns"] / 1e6,
+				"VmHWM_kB": ms["exit_maxrss_kb"],
+			})
+		if "wall_s" in fl:
+			res["flush"]["wall_ms"] = fl["wall_s"] * 1000
 	with open(out_path, "w") as f:
 		json.dump(res, f, indent=1, sort_keys=True)
 		f.write("\n")

@@ -340,7 +340,8 @@ sh tests/netns.sh build/routebot
 
 `tests/gate.sh` is what every change has to pass: a clean ASan+UBSan build
 (warnings counted), unit tests (`tests/unit/test_*.c`, run by
-ctest), `tests/netns.sh` on the sanitized build with leaks fatal, a clean
+ctest), `tests/netns.sh` on the sanitized build with leaks fatal,
+`tests/init.sh` (the init script's stop logic, procd stubbed), a clean
 release build benchmarked against `tests/bench/baseline.json`, and a clean
 cross build with the OpenWrt SDK. Point `HOSTDEPS` and `OPENWRT_SDK` at the
 host libraries and the SDK.

@@ -219,6 +219,7 @@ run_unit reload_small
 quiesce end
 
 say "shutdown"
+kstate > "$T/state.end"
 S=$(now)
 kill -TERM "$PID"
 EXIT_STATUS=0
@@ -227,7 +228,22 @@ E=$(now)
 PID=
 snap exit "$(echo "$S $E" | awk '{ printf "%.6f", ($2 - $1) / 1e9 }')"
 [ "$EXIT_STATUS" = 0 ] && pass "exit status 0" >> "$CHECKS" || fail "exit status $EXIT_STATUS"
-[ -z "$(kstate)" ] && pass "nothing left after exit" >> "$CHECKS" || fail "state left after exit"
+kstate > "$T/state.exit"
+cmp -s "$T/state.end" "$T/state.exit" && pass "all left in place after exit" >> "$CHECKS" ||
+	fail "state changed by exit"
+[ "$FAILS" = 0 ] || finish
+
+# --- flush ---
+# routebot -F over everything installed, a process of its own
+say "flush"
+rb_env() { RB_ENV="env LD_PRELOAD=$SHIM MALLOCSTAT_FILE=$CNT ROUTEBOT_UBUS_SOCKET=$T/ubus.sock"; }
+CNT=$T/mallocstat.flush; rb_env
+S=$(now)
+flush >> "$CHECKS"
+E=$(now)
+snap flush "$(echo "$S $E" | awk '{ printf "%.6f", ($2 - $1) / 1e9 }')"
+sample flush "flush: "
+[ -z "$(kstate)" ] && pass "nothing left after flush" >> "$CHECKS" || fail "state left after flush"
 [ "$FAILS" = 0 ] || finish
 
 # --- restart_dirty ---
@@ -235,7 +251,6 @@ snap exit "$(echo "$S $E" | awk '{ printf "%.6f", ($2 - $1) / 1e9 }')"
 # it left behind with the config in place: from exec until idle
 say "restart_dirty"
 cp "$T/m03.orig" "$L/misc/m03.lst"
-rb_env() { RB_ENV="env LD_PRELOAD=$SHIM MALLOCSTAT_FILE=$CNT ROUTEBOT_UBUS_SOCKET=$T/ubus.sock"; }
 CNT=$T/mallocstat.crashed; rb_env
 start >> "$CHECKS"
 quiesce restart_crashed
@@ -267,7 +282,9 @@ wait "$PID" || _st=$?
 PID=
 [ "$_st" = 0 ] && pass "restart_dirty: exit status 0" >> "$CHECKS" ||
 	fail "restart_dirty: exit status $_st"
-[ -z "$(kstate)" ] && pass "restart_dirty: nothing left after exit" >> "$CHECKS" ||
-	fail "restart_dirty: state left after exit"
+RB_ENV=
+flush >> "$CHECKS"
+[ -z "$(kstate)" ] && pass "restart_dirty: nothing left after flush" >> "$CHECKS" ||
+	fail "restart_dirty: state left after flush"
 if grep -q "Sanitizer\|runtime error:" "$LOG"; then fail "sanitizer reports"; fi
 finish

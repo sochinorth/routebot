@@ -89,7 +89,7 @@ for SHIFT in 2 -2; do
 		_p=10000
 		[ $PRIO = moved ] && _p=$((10000 + SHIFT))
 		echo "== R3: reload, table_id 10000 -> $_t, rule_prio 10000 -> $_p"
-		[ -n "$PID" ] && stop
+		[ -n "$PID" ] && { stop; flush; }
 		write_config 10000 10000
 		start
 		settled 10000
@@ -106,7 +106,7 @@ done
 for SHIFT in 2 -2; do
 	_t=$((10000 + SHIFT))
 	echo "== R3/R5: startup over a crash's leftovers, table_id 10000 -> $_t"
-	[ -n "$PID" ] && stop
+	[ -n "$PID" ] && { stop; flush; }
 	write_config 10000 10000
 	start
 	kill -KILL "$PID"; wait "$PID" 2>/dev/null || true; PID=
@@ -119,6 +119,8 @@ for SHIFT in 2 -2; do
 	same_as_fresh "table_id $_t, at startup"
 done
 stop
+flush
+empty kstate
 
 if grep -q "ERROR: AddressSanitizer\|runtime error:" "$LOG"; then
 	fail "sanitizer reports"; grep -A5 "Sanitizer\|runtime error" "$LOG"

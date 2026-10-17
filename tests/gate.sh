@@ -4,7 +4,8 @@
 #
 #   1. clean ASan+UBSan debug build (host), warnings counted and shown
 #   2. unit tests (tests/unit/test_*.c via ctest), if there are any
-#   3. tests/netns.sh against the sanitized build, leaks fatal
+#   3. tests/netns.sh (and flush, hostile, tables) against the sanitized
+#      build, leaks fatal; tests/init.sh
 #   4. clean release build -> tests/bench/bench.sh -> compare.py against
 #      tests/bench/baseline.json
 #   5. clean cross build with the OpenWrt SDK (aarch64 musl), warnings counted
@@ -114,6 +115,7 @@ fi
 SHOW_LOG=1 "$ROOT/tests/flush.sh" "$B-asan/routebot" >> "$B-asan/netns.out" 2>&1 || { cat "$B-asan/netns.out"; die "3. flush.sh failed"; }
 SHOW_LOG=1 "$ROOT/tests/hostile.sh" "$B-asan/routebot" >> "$B-asan/netns.out" 2>&1 || { cat "$B-asan/netns.out"; die "3. hostile.sh failed"; }
 SHOW_LOG=1 "$ROOT/tests/tables.sh" "$B-asan/routebot" >> "$B-asan/netns.out" 2>&1 || { cat "$B-asan/netns.out"; die "3. tables.sh failed"; }
+"$ROOT/tests/init.sh" >> "$B-asan/netns.out" 2>&1 || { cat "$B-asan/netns.out"; die "3. init.sh failed"; }
 if grep -q "Sanitizer\|runtime error:" "$B-asan/netns.out"; then
 	grep -B2 -A20 "Sanitizer\|runtime error:" "$B-asan/netns.out"
 	die "3. sanitizer reports in the netns.sh log"

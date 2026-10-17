@@ -154,6 +154,8 @@ vpn0_flap
 same_as_fresh "vpn0 flap beside a refused member"
 
 stop
+flush
+empty kstate
 
 if grep -q "ERROR: AddressSanitizer\|runtime error:" "$LOG"; then
 	fail "sanitizer reports"; grep -A5 "Sanitizer\|runtime error" "$LOG"

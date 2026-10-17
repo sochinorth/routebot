@@ -97,10 +97,12 @@ def main():
 		for k in GATED_UNIT + INFO_UNIT:
 			if k in bu or k in cu:
 				row("unit", unit, k, bu.get(k), cu.get(k), k in GATED_UNIT)
-	bs, cs = base.get("shutdown", {}), cur.get("shutdown", {})
-	for k in ("allocs", "bytes", "cpu_ms", "user_ms", "sys_ms", "sched_cpu_ms", "wall_ms"):
-		if k in bs:
-			row("shutdown", "", k, bs.get(k), cs.get(k), False)
+	for sec in ("shutdown", "flush"):
+		bs, cs = base.get(sec, {}), cur.get(sec, {})
+		for k in ("allocs", "bytes", "VmHWM_kB", "heap_peak_kB", "cpu_ms", "user_ms",
+			  "sys_ms", "sched_cpu_ms", "wall_ms"):
+			if k in bs or k in cs:
+				row(sec, "", k, bs.get(k), cs.get(k), False)
 
 	w = [max(len(r[i]) for r in rows + [("where", "metric", "baseline", "current", "delta", "")])
 	     for i in range(6)]

@@ -664,12 +664,38 @@ if ip -6 rule | grep -q 'proto 234'; then fail "old proto v6 rules left"; else p
 RB_PROTO=233
 same_as_fresh "rt_proto 233 again, nexthop ids moved back"
 
-echo "== SIGTERM cleans up"
+echo "== SIGTERM leaves everything in place, a restart takes it over"
+kstate > "$T/state.before"
 stop
+not_logged "flush:"
+kstate > "$T/state.after"
+cmp -s "$T/state.before" "$T/state.after" && pass "SIGTERM left the state in place" ||
+	fail "SIGTERM changed the state"
+start
+# everything is where the config wants it: nothing to set or delete
+wait_log "reconcile: 7 prefix routes in place"
+wait_log "sync (startup): nothing to do"
+not_logged "flush:"
+kstate > "$T/state.after"
+cmp -s "$T/state.before" "$T/state.after" && pass "restart: same state" ||
+	{ fail "restart: state differs"; diff -u "$T/state.before" "$T/state.after" | sed 's/^/     | /'; }
+
+echo "== routebot -F cleans up, reading no list"
+stop
+# a list that blocks whoever opens it: -F must not read it
+mkfifo "$T/lists/fifo.lst"
+flush
+rm "$T/lists/fifo.lst"
+wait_log "flush: removed 8 rules, 14 nexthops and the routes on them"
+not_logged "config:"
 empty ip route show table all proto 233
 empty ip -6 route show table all proto 233
 empty nh
 if ip rule | grep -q "proto 233"; then fail "rules left"; else pass "no rules left"; fi
+
+echo "== routebot -F with nothing installed"
+flush
+not_logged "flush:"
 
 echo "== crash leftovers are reconciled away on start"
 start
@@ -704,6 +730,7 @@ if [ "$(ip rule | grep -c 'proto 233')" = 4 ]; then pass "4 v4 rules"; else fail
 if [ "$(nh | grep -c 'proto 233')" = 14 ]; then pass "14 nexthops"; else fail "nexthop count"; nh; fi
 same_as_fresh "crash leftovers reconciled"
 stop
+flush
 
 echo "== foreign nexthop in our id range"
 ip nexthop add id 10006 dev vpn0
@@ -881,6 +908,8 @@ has "7.7.7.0/24 nhid 10004 proto 233" ip route show table 10000
 has "default nhid 10004 proto 233" ip route show table 10002
 same_as_fresh "t1 flap unseen by a probe sync"
 stop
+flush
+empty kstate
 kill $FAR 2>/dev/null
 
 if grep -q "ERROR: AddressSanitizer\|runtime error:" "$LOG"; then
