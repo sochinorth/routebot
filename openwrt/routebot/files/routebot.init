@@ -4,6 +4,7 @@ START=60
 USE_PROCD=1
 
 PROG=/usr/sbin/routebot
+TERM_TIMEOUT=5
 
 start_service() {
 	procd_open_instance
@@ -11,9 +12,25 @@ start_service() {
 	procd_set_param respawn
 	procd_set_param stdout 1
 	procd_set_param stderr 1
-	# the exit flush can take a moment with big lists
-	procd_set_param term_timeout 30
+	# SIGTERM exits at once, or after the sync in progress: killing that
+	# sync is harmless, the flush below or the next start's reconcile
+	# fixes up whatever it left half done
+	procd_set_param term_timeout $TERM_TIMEOUT
 	procd_close_instance
+}
+
+# The daemon leaves its routes in place on exit: a restart's start
+# reconciles them, a stop (or shutdown) flushes them once it is gone.
+service_stopped() {
+	local i=0
+
+	[ "$action" = restart ] && return 0
+	# procd_kill doesn't wait; past term_timeout procd has SIGKILLed it
+	while pidof routebot > /dev/null && [ $i -le $TERM_TIMEOUT ]; do
+		sleep 1
+		i=$((i + 1))
+	done
+	"$PROG" -F -c /etc/config/routebot
 }
 
 reload_service() {

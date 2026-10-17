@@ -90,8 +90,9 @@ members, so a member leaving or joining, and a group going dark or coming
 back, is a single group replace with no route rewritten.
 
 Everything is applied for both IPv4 and IPv6. Every rule, route and nexthop is
-tagged with `rt_proto`, so routebot can clean up after itself. On exit it
-removes all of it. It refuses to start if a nexthop id in its range
+tagged with `rt_proto`, so routebot can clean up after itself: a new start
+takes over what it finds in place, and `routebot -F` removes all of it. It
+refuses to start if a nexthop id in its range
 (`nexthop_id` to the last device or group) belongs to someone else.
 
 ### Keeping the kernel in sync
@@ -271,15 +272,29 @@ routebot refuses the old options with an error naming the replacement.
 
 ```
 routebot [-c config] [-v] [-q]
+routebot -F [-c config]
 ```
+
+`-F` flushes: it removes every route, nexthop and rule tagged with the
+config's `rt_proto`, then exits (1 if some couldn't be removed). It reads only
+the config's globals and groups, not the lists, and needs no daemon running;
+with nothing installed it does nothing.
 
 | Signal | Effect |
 |---|---|
 | `SIGHUP` | Reload the config and list files, and apply only what changed. The lists aren't read again while the cidrsets match the same files for the same rules, each with the same inode, size and times. If the new config is invalid, the old one stays in place. |
-| `SIGTERM`, `SIGINT` | Remove everything routebot installed, then exit. |
+| `SIGTERM`, `SIGINT` | Exit, leaving everything installed in place: the next start reconciles it in place, `-F` removes it. |
 
-On OpenWrt use `service routebot start|reload|stop`. Changing the UCI config
-triggers a reload automatically.
+On OpenWrt use `service routebot start|reload|restart|stop`. Changing the UCI
+config triggers a reload automatically. `stop` (and a shutdown) waits for the
+daemon to exit, then runs `routebot -F`; `restart` doesn't flush, so traffic
+keeps its routes while the new daemon takes them over. A crashed daemon is
+respawned by procd and takes over in place too.
+
+`-F` flushes the `rt_proto` in the config file as it is now. Changing
+`rt_proto` in the file and stopping without a reload in between leaves the
+old proto's objects behind; flush those with a config naming the old proto,
+or reload before stopping.
 
 Each sync logs what it touched, e.g. a member failing its probes:
 
@@ -371,8 +386,10 @@ routebot alone (it drops itself from the environment at start) that keeps its
 counters in a shared file. After each step the bench waits until routebot is
 idle: counters and CPU time unchanged for 300 ms, routebot in `epoll_wait`,
 no signal pending and no unread netlink data. `shutdown` (SIGTERM at the
-`end` until exit: the flush) reports allocations, CPU from the shim's record
-at exit, and wall time; nothing may be left behind.
+`end` until exit) reports allocations, CPU from the shim's record at exit,
+and wall time; everything must be left in place. `flush` (`routebot -F` over
+that state, a process of its own) reports the same, plus its VmHWM; nothing
+may be left behind.
 
 `compare.py` fails on a broken run, a different workload, or a regression of
 more than 10% in memory (per phase) or in allocations or bytes per unit,

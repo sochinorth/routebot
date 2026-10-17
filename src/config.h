@@ -157,6 +157,11 @@ bool config_dev_probed(const struct config *c, size_t d);
 
 /* prev: the config in use, whose lists are shared if their files are unchanged */
 struct config *config_load(const char *path, const struct config *prev);
+/*
+ * Globals and groups only: no rules, no lists read (n_rules 0, lists NULL),
+ * for what needs no more than the protos, ids and tables.
+ */
+struct config *config_load_globals(const char *path);
 void config_free(struct config *c);
 
 #endif

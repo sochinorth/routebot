@@ -450,17 +450,40 @@ static void sig_cb(struct uloop_fd *fd, unsigned events)
 			break;
 		case SIGINT:
 		case SIGTERM:
-			info("caught signal %u, exiting", si.ssi_signo);
+			info("caught signal %u, exiting, routes left in place", si.ssi_signo);
 			uloop_end();
 			break;
 		}
 	}
 }
 
+/*
+ * routebot -F: remove everything with the config's rt_proto, then exit.
+ * Only the globals are read, not the lists; no daemon needs to run.
+ */
+static int flush_main(void)
+{
+	struct config *cfg = config_load_globals(rb.cfg_path);
+	int ret;
+
+	if (!cfg)
+		return 1;
+	if (nl_open(&rb.nl)) {
+		config_free(cfg);
+		return 1;
+	}
+	ret = sync_flush(&rb.nl, cfg->rt_proto) ? 1 : 0;
+	nl_close(&rb.nl);
+	config_free(cfg);
+	return ret;
+}
+
 static void usage(const char *prog)
 {
 	fprintf(stderr,
-		"usage: %s [-c config] [-v]\n"
+		"usage: %s [-F] [-c config] [-v] [-q]\n"
+		"  -F        flush: remove all routes, nexthops and rules with the\n"
+		"            config's rt_proto, then exit (the daemon leaves them)\n"
 		"  -c path   config file (default " DEFAULT_CONFIG ")\n"
 		"  -v        more verbose logging\n"
 		"  -q        less verbose logging\n",
@@ -471,10 +494,14 @@ int main(int argc, char **argv)
 {
 	sigset_t mask;
 	int opt, ret = 1;
+	bool flush = false;
 
 	rb.cfg_path = DEFAULT_CONFIG;
-	while ((opt = getopt(argc, argv, "c:vqh")) != -1) {
+	while ((opt = getopt(argc, argv, "Fc:vqh")) != -1) {
 		switch (opt) {
+		case 'F':
+			flush = true;
+			break;
 		case 'c':
 			rb.cfg_path = optarg;
 			break;
@@ -493,6 +520,8 @@ int main(int argc, char **argv)
 	}
 
 	setvbuf(stderr, NULL, _IOLBF, 0);
+	if (flush)
+		return flush_main();
 
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGHUP);
@@ -553,12 +582,8 @@ int main(int argc, char **argv)
 
 	info("running");
 	uloop_run();
-
-	/* a failed sync may have left rb.cfg's proto behind too */
-	ret = sync_flush(&rb.nl, rb.cfg->rt_proto) ? 1 : 0;
-	if (rb.applied.cfg && rb.applied.cfg->rt_proto != rb.cfg->rt_proto &&
-	    sync_flush(&rb.nl, rb.applied.cfg->rt_proto))
-		ret = 1;
+	/* no flush: the next start reconciles in place, routebot -F flushes */
+	ret = 0;
 
 out:
 	probes_free(rb.probes);

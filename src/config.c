@@ -997,7 +997,7 @@ static int validate(struct config *c, const struct nh_defaults *d)
 	return 0;
 }
 
-struct config *config_load(const char *path, const struct config *prev)
+static struct config *load(const char *path, const struct config *prev, bool lists)
 {
 	struct uci_context *ctx = NULL;
 	struct uci_package *pkg = NULL;
@@ -1085,6 +1085,10 @@ struct config *config_load(const char *path, const struct config *prev)
 
 	if (validate(c, &defs))
 		goto out;
+	if (!lists) {
+		ok = true;
+		goto out;
+	}
 
 	/* pass 2: rules */
 	uci_foreach_element(&pkg->sections, e) {
@@ -1193,6 +1197,16 @@ out:
 		return NULL;
 	}
 	return c;
+}
+
+struct config *config_load(const char *path, const struct config *prev)
+{
+	return load(path, prev, true);
+}
+
+struct config *config_load_globals(const char *path)
+{
+	return load(path, NULL, false);
 }
 
 void config_free(struct config *c)
